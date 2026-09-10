@@ -5,3 +5,9 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "TOML system-configuration DSL parsing and validation for demu."
+
+[dependencies]
+rustc-hash = "2.1.3"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.20"
+toml = "1.1.5"

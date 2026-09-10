@@ -1,0 +1,63 @@
+# Smoke machine: a trivial synthetic system for framework tests.
+#
+# The machine has one clock domain, one ROM chip, one RAM chip, and one CPU
+# shim. It exists to exercise the configuration, construction, and
+# save-state machinery without any real hardware.
+
+[system]
+name = "smoke"
+triple = "smoke"
+description = "A trivial synthetic machine for framework tests."
+
+[clock.main]
+frequency = "4194304"
+origin = "synthetic test domain"
+
+[[device]]
+name = "cpu0"
+kind = "smoke.cpu"
+domain = "main"
+[device.dividers]
+cpu = 1
+
+[[device]]
+name = "rom0"
+kind = "smoke.rom"
+domain = "main"
+
+[[device]]
+name = "ram0"
+kind = "smoke.ram"
+domain = "main"
+
+[[bus]]
+name = "main_bus"
+address_bits = 16
+
+[[window]]
+name = "w_ram"
+bus = "main_bus"
+device = "ram0"
+base = "0x8000"
+size = "0x8000"
+
+[[bus]]
+name = "rom_bus"
+address_bits = 16
+owner = "cpu0"
+
+[[window]]
+name = "w_rom"
+bus = "rom_bus"
+device = "rom0"
+base = "0x0000"
+size = "0x10000"
+
+[boot.rom0]
+pattern = "zero"
+
+[boot.ram0]
+pattern = "zero"
+
+[boot.cpu0]
+registers = { ip = "0x0100" }
