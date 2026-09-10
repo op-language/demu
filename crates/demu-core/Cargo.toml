@@ -5,3 +5,8 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Cycles, scheduler, buses, device traits, triggers, and save states for the demu emulator."
+
+[dependencies]
+demu-config = { version = "0.1.0", path = "../demu-config" }
+rustc-hash = "2.1.3"
+thiserror = "2.0.20"

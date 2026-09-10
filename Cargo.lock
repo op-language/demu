@@ -19,6 +19,11 @@ dependencies = [
 [[package]]
 name = "demu-core"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "rustc-hash",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-cpu-huc6280"

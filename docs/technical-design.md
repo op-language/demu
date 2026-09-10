@@ -221,8 +221,8 @@ ident   := register name | symbol name | device-qualified name
 Operator precedence, from low to high: `||`, `&&`, comparison, additive,
 multiplicative, unary `!`, primary.
 
-Evaluation semantics: all arithmetic is unsigned integer arithmetic at the
-natural width of the operand (8, 16, or 32 bit as the register declares).
+Evaluation semantics: all arithmetic is unsigned 64-bit arithmetic. A
+register wider than 64 bit does not exist in the supported machines.
 Division by zero evaluates to 0. A comparison evaluates to 1 or 0. An
 unknown identifier is a configuration error, evaluated once at trigger
 creation.
