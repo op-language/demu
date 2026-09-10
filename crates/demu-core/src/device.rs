@@ -37,6 +37,12 @@ pub trait Device {
     /// The stable device name from the configuration.
     fn name(&self) -> &str;
 
+    /// The device as `Any`, for shell-side downcasting in debug commands.
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// The device as a mutable `Any`, for shell-side downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
     /// Restore power-on state without the configured boot data.
     fn reset(&mut self);
 

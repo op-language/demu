@@ -9,3 +9,10 @@ description = "A cycle-accurate debugging emulator for the op-language targets."
 [[bin]]
 name = "demu"
 path = "src/main.rs"
+
+[dependencies]
+demu-config = { version = "0.1.0", path = "../demu-config" }
+demu-core = { version = "0.1.0", path = "../demu-core" }
+demu-shell = { version = "0.1.0", path = "../demu-shell" }
+demu-symbols = { version = "0.1.0", path = "../demu-symbols" }
+png = "0.18.1"

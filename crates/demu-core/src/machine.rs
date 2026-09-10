@@ -133,9 +133,40 @@ impl Machine {
     }
 
     /// Boot every device to its configured boot state.
+    ///
+    /// The boot states attach to the smoke devices here: the configuration
+    /// is the single source of the boot data, and each device receives its
+    /// own state before `Device::boot` runs.
     pub fn boot(&mut self) {
+        for (i, d) in self.devices.iter_mut().enumerate() {
+            if let Some(state) = self.config.boot.get(&self.config.devices[i].name) {
+                if let Some(cpu) = d.as_any_mut().downcast_mut::<devices::SmokeCpu>() {
+                    cpu.attach_boot(state);
+                }
+                if let Some(ram) = d.as_any_mut().downcast_mut::<devices::SmokeRam>() {
+                    ram.attach_boot(state.clone());
+                }
+                if let Some(rom) = d.as_any_mut().downcast_mut::<devices::SmokeRom>() {
+                    rom.attach_boot(state.clone());
+                }
+            }
+        }
         for d in &mut self.devices {
             d.boot();
+        }
+    }
+
+    /// Seed every domain queue with the devices' declared next events.
+    ///
+    /// A device that declares `next_event` after boot or after its own
+    /// tick is visited by the scheduler at that time. The domain index
+    /// comes from the device's configured domain.
+    fn seed_queue(&mut self) {
+        let domain_index = self.scheduler.primary;
+        for (slot, d) in self.devices.iter().enumerate() {
+            if let Some(at) = d.next_event() {
+                self.scheduler.domains[domain_index].schedule(slot, at);
+            }
         }
     }
 
@@ -148,6 +179,7 @@ impl Machine {
 
     /// Run the machine until the primary domain reaches `target`.
     pub fn run_until(&mut self, target: Tick) {
+        self.seed_queue();
         loop {
             if !self.step_once(target) {
                 return;
@@ -188,12 +220,21 @@ impl Machine {
             .next_time()
             .expect("the loop found a non-empty queue");
         self.scheduler.domains[i].advance_to(next);
+        let mut reschedule: Vec<(usize, Tick)> = Vec::new();
         while let Some(event) = self.scheduler.domains[i].pop_due() {
             let tick = event.tick;
             let slot = event.device;
             if slot < self.devices.len() {
                 self.devices[slot].tick(tick);
+                if let Some(next) = self.devices[slot].next_event()
+                    && next > tick
+                {
+                    reschedule.push((slot, next));
+                }
             }
+        }
+        for (slot, at) in reschedule {
+            self.scheduler.domains[i].schedule(slot, at);
         }
         if self.scheduler.domains[self.scheduler.primary].now >= target {
             return false;
@@ -333,6 +374,14 @@ pub mod devices {
             &self.name
         }
 
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+
         fn reset(&mut self) {
             self.ip = 0;
             self.next = None;
@@ -407,11 +456,34 @@ pub mod devices {
         pub fn data(&self) -> &[u8] {
             &self.data
         }
+
+        /// The memory size in bytes.
+        pub fn data_len(&self) -> usize {
+            self.data.len()
+        }
+
+        /// Poke one debug byte at `index`.
+        ///
+        /// # Panics
+        ///
+        /// Panics when `index` is outside the memory. The caller resolves
+        /// the index through the bus, which bounds it.
+        pub fn poke(&mut self, index: usize, value: u8) {
+            self.data[index] = value;
+        }
     }
 
     impl Device for SmokeRam {
         fn name(&self) -> &str {
             &self.name
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
         }
 
         fn reset(&mut self) {
@@ -473,11 +545,24 @@ pub mod devices {
         pub fn attach_boot(&mut self, state: BootState) {
             self.boot = Some(state);
         }
+
+        /// The current memory bytes.
+        pub fn data(&self) -> &[u8] {
+            &self.data
+        }
     }
 
     impl Device for SmokeRom {
         fn name(&self) -> &str {
             &self.name
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
         }
 
         fn reset(&mut self) {}
