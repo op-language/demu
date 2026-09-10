@@ -1,0 +1,7 @@
+[package]
+name = "demu-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "TOML system-configuration DSL parsing and validation for demu."

@@ -1,0 +1,7 @@
+[package]
+name = "demu-dev-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Sound chips."

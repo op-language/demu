@@ -1,0 +1,7 @@
+[package]
+name = "demu-cpu-m68000"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Motorola 68000 CPU core."

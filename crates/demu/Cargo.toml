@@ -1,0 +1,11 @@
+[package]
+name = "demu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "A cycle-accurate debugging emulator for the op-language targets."
+
+[[bin]]
+name = "demu"
+path = "src/main.rs"
