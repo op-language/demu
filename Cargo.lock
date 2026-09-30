@@ -149,6 +149,7 @@ dependencies = [
  "demu-config",
  "demu-core",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

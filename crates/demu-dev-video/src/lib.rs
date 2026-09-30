@@ -8,9 +8,16 @@
 //! effects are exact. The CGB adds the second VRAM bank, the color
 //! palettes, and the object priority mode.
 
+pub mod antic;
+pub mod maria;
 pub mod nes;
+pub mod tia;
 
+pub use antic::Antic;
+pub use maria::Maria;
 pub use nes::NesPpu;
+pub use tia::Tia;
+pub use tia::color_rgb as tia_color_rgb;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, Frame, MachineCtx, VideoLayer, VideoSource};

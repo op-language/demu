@@ -9,8 +9,10 @@
 //! the configured pattern. The MBC3 real-time clock registers are
 //! stored but do not tick.
 
+pub mod atari;
 pub mod nes;
 
+pub use atari::{Atari2600Cart, Atari5200Cart, Atari7800Cart};
 pub use nes::{NesCart, NesHeader, NesMapper};
 
 use demu_config::model::BootState;

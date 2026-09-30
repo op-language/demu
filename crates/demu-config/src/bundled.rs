@@ -30,6 +30,15 @@ pub const NES_NTSC_6502: &str = include_str!("../../../configs/mos6502-nintendo-
 /// The plain 6502 view of the PAL NES.
 pub const NES_PAL_6502: &str = include_str!("../../../configs/mos6502-nintendo-nes-pal.toml");
 
+/// The Atari 2600.
+pub const ATARI_2600: &str = include_str!("../../../configs/mos6502-atari-2600.toml");
+
+/// The Atari 5200.
+pub const ATARI_5200: &str = include_str!("../../../configs/mos6502-atari-5200.toml");
+
+/// The Atari 7800.
+pub const ATARI_7800: &str = include_str!("../../../configs/mos6502-atari-7800.toml");
+
 /// A bundled config source: the triple name and the embedded text.
 pub struct BundledConfig {
     /// The triple name that selects this config.
@@ -67,6 +76,18 @@ pub const BUNDLED: &[BundledConfig] = &[
     BundledConfig {
         triple: "mos6502-nintendo-nes-pal",
         text: NES_PAL_6502,
+    },
+    BundledConfig {
+        triple: "mos6502-atari-2600",
+        text: ATARI_2600,
+    },
+    BundledConfig {
+        triple: "mos6502-atari-5200",
+        text: ATARI_5200,
+    },
+    BundledConfig {
+        triple: "mos6502-atari-7800",
+        text: ATARI_7800,
     },
 ];
 

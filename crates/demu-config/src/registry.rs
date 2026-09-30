@@ -190,6 +190,23 @@ pub fn core_registry() -> &'static KindRegistry {
             };
             r.register(KindInfo::new(key, DomainRequirement::Required, &[]));
         }
+        // The Atari machine family: the 2600 and the video slice and
+        // sound chips of the 5200 and the 7800. The CPU kinds reuse
+        // the plain 6502 kind with divider overrides from the config.
+        for kind in [
+            "atari.tia",
+            "atari.riot",
+            "atari.antic",
+            "atari.pokey",
+            "atari.maria",
+            "atari.ram",
+            "atari.rom",
+            "atari.cart2600",
+            "atari.cart5200",
+            "atari.cart7800",
+        ] {
+            r.register(KindInfo::new(kind, DomainRequirement::Required, &[]));
+        }
         r
     })
 }

@@ -1,0 +1,142 @@
+# Atari 5200, NTSC: the SALLY 6502C at one quarter of the master
+# crystal, with the ANTIC display-list processor, the CTIA/GTIA die
+# pair, and POKEY.
+#
+# One clock domain at the master crystal, 315000000/44 Hz. The CPU
+# cycle is four ticks; ANTIC and GTIA walk one color clock per visit,
+# which is two master ticks. POKEY runs its audio and keyboard timers
+# on CPU cycles.
+
+[system]
+name = "Atari 5200"
+triple = "mos6502-atari-5200"
+description = "The NTSC Atari 5200 with the ANTIC and GTIA display pipeline and POKEY."
+
+[clock.main]
+frequency = "315000000/44"
+origin = "NTSC master crystal; the CPU cycle is 4 ticks and the color clock 2 ticks"
+
+[[device]]
+name = "cpu0"
+kind = "mos6502.cpu"
+domain = "main"
+[device.dividers]
+cpu = 4
+
+# The display pipeline: one device carries the ANTIC processor and the
+# GTIA register file because the pixel output is internal to the die
+# pair. The GTIA registers answer $C000 and the ANTIC file $D400.
+[[device]]
+name = "antic"
+kind = "atari.antic"
+domain = "main"
+[device.params]
+fetch_bus = "cpu"
+[device.dividers]
+dot = 2
+
+[[device]]
+name = "pokey"
+kind = "atari.pokey"
+domain = "main"
+[device.dividers]
+cpu = 4
+
+[[device]]
+name = "wram"
+kind = "atari.ram"
+domain = "main"
+[device.params]
+size = 0x4000
+
+# The two-KiB boot ROM that finds the cart vector at $BFFE.
+[[device]]
+name = "bios"
+kind = "atari.rom"
+domain = "main"
+[device.params]
+size = 0x800
+readonly = true
+
+[[device]]
+name = "cart"
+kind = "atari.cart5200"
+domain = "main"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[window]]
+name = "w_ram"
+bus = "cpu"
+device = "wram"
+base = "0x0000"
+size = "0x4000"
+
+[[window]]
+name = "w_cart"
+bus = "cpu"
+device = "cart"
+base = "0x4000"
+size = "0x8000"
+
+[[window]]
+name = "w_gtia"
+bus = "cpu"
+device = "antic"
+base = "0xC000"
+size = "0x0020"
+mirror_stride = "0x0020"
+mirror_count = 7
+
+[[window]]
+name = "w_antic"
+bus = "cpu"
+device = "antic"
+base = "0xD400"
+size = "0x0010"
+mirror_stride = "0x0100"
+mirror_count = 1
+
+[[window]]
+name = "w_pokey"
+bus = "cpu"
+device = "pokey"
+base = "0xE800"
+size = "0x0010"
+mirror_stride = "0x0100"
+mirror_count = 15
+
+[[window]]
+name = "w_bios"
+bus = "cpu"
+device = "bios"
+base = "0xF800"
+size = "0x0800"
+
+# The ANTIC raises the NMI for display-list and vertical-blank events,
+# and steals machine cycles during its DMA through the halt line.
+[[connection]]
+from = "antic.nmi"
+to = "cpu0.nmi"
+semantics = "display-sync"
+
+[[connection]]
+from = "antic.halt"
+to = "cpu0.halt"
+semantics = "dma-request"
+
+[[connection]]
+from = "pokey.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+# The BIOS image file: reads at boot; the tests supply one through a
+# boot override.
+[boot.bios]
+rom = "atari5200-bios.rom"
+
+[quirks]
+"mos6502.undocumented" = true

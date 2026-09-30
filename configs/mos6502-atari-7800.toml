@@ -1,0 +1,184 @@
+# Atari 7800, NTSC: the SALLY 6502C and the MARIA graphics processor,
+# with the TIA die for sound and input and the RIOT 6532 for ports.
+#
+# One clock domain at the master crystal, 315000000/44 Hz. MARIA walks
+# one pixel clock per visit, which is one master tick (the 456-cycle
+# scanline); the CPU cycle is four ticks. The four-kilobyte BIOS boot
+# ROM answers $C000-$CFFF and the cartridge hides it when its image maps
+# over that range.
+
+[system]
+name = "Atari 7800"
+triple = "mos6502-atari-7800"
+description = "The NTSC Atari 7800 with the MARIA display processor and the 6502C CPU."
+
+[clock.main]
+frequency = "315000000/44"
+origin = "NTSC master crystal; the CPU cycle is 4 ticks and the MARIA pixel clock 1 tick"
+
+[[device]]
+name = "cpu0"
+kind = "mos6502.cpu"
+domain = "main"
+[device.dividers]
+cpu = 4
+
+[[device]]
+name = "maria"
+kind = "atari.maria"
+domain = "main"
+[device.params]
+fetch_bus = "cpu"
+[device.dividers]
+dot = 1
+
+# The TIA die in sound-only form: video comes from MARIA.
+[[device]]
+name = "tia"
+kind = "atari.tia"
+domain = "main"
+[device.params]
+video = false
+[device.dividers]
+dot = 2
+
+[[device]]
+name = "riot"
+kind = "atari.riot"
+domain = "main"
+[device.dividers]
+cpu = 4
+
+[[device]]
+name = "wram"
+kind = "atari.ram"
+domain = "main"
+[device.params]
+size = 0x1000
+
+# The four-kilobyte boot ROM with the console signature check.
+[[device]]
+name = "bios"
+kind = "atari.rom"
+domain = "main"
+[device.params]
+size = 0x1000
+readonly = true
+
+[[device]]
+name = "cart"
+kind = "atari.cart7800"
+domain = "main"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+# The low pages: TIA registers at $0000-$001F, MARIA at $0020-$003F,
+# the RAM shadow of the zero page plus the stack page, and the RIOT.
+[[window]]
+name = "w_tia"
+bus = "cpu"
+device = "tia"
+base = "0x0000"
+size = "0x0020"
+
+[[window]]
+name = "w_maria"
+bus = "cpu"
+device = "maria"
+base = "0x0020"
+size = "0x0020"
+
+[[window]]
+name = "w_zeroram"
+bus = "cpu"
+device = "wram"
+base = "0x0040"
+size = "0x00C0"
+
+[[window]]
+name = "w_stack"
+bus = "cpu"
+device = "wram"
+base = "0x0140"
+size = "0x00C0"
+
+[[window]]
+name = "w_riot"
+bus = "cpu"
+device = "riot"
+base = "0x0280"
+size = "0x0020"
+mirror_stride = "0x0020"
+mirror_count = 7
+
+# The main RAM at $1800-$27FF repeats into the shadow pages.
+[[window]]
+name = "w_ram"
+bus = "cpu"
+device = "wram"
+base = "0x1800"
+size = "0x0800"
+
+[[window]]
+name = "w_ram2"
+bus = "cpu"
+device = "wram"
+base = "0x2000"
+size = "0x0800"
+
+# The cartridge windows; the banked form pages through $8000-$BFFF.
+[[window]]
+name = "w_cart"
+bus = "cpu"
+device = "cart"
+base = "0x4000"
+size = "0x4000"
+
+# The high windows cover $8000-$BFFF and $D000-$FFFF: a flat cart
+# image that ends at $FFFF answers the interrupt vectors through the
+# top window while the BIOS stays visible at $C000-$CFFF.
+[[window]]
+name = "w_cart_hi"
+bus = "cpu"
+device = "cart"
+base = "0x8000"
+size = "0x4000"
+
+[[window]]
+name = "w_cart_top"
+bus = "cpu"
+device = "cart"
+base = "0xD000"
+size = "0x3000"
+
+# The BIOS answers $C000-$CFFF; a flat cart image that covers that
+# range hides it through the window order.
+[[window]]
+name = "w_bios"
+bus = "cpu"
+device = "bios"
+base = "0xC000"
+size = "0x1000"
+
+# MARIA steals machine cycles for display-list DMA through the halt
+# line and raises the NMI after a flagged zone.
+[[connection]]
+from = "maria.halt"
+to = "cpu0.halt"
+semantics = "dma-request"
+
+[[connection]]
+from = "maria.nmi"
+to = "cpu0.nmi"
+semantics = "display-sync"
+
+# The BIOS image file: reads at boot; the tests supply one through a
+# boot override.
+[boot.bios]
+rom = "atari7800-bios.rom"
+
+[quirks]
+"mos6502.undocumented" = true

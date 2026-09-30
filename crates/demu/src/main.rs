@@ -804,3 +804,416 @@ pub mod nes_machine_tests {
         assert_eq!(cpu.kind.as_str(), "mos6502.cpu");
     }
 }
+
+#[cfg(test)]
+pub mod atari_machine_tests {
+    use crate::assemble;
+    use demu_core::machine::Machine;
+    use demu_core::{Device as _, Tick};
+
+    /// Assemble one machine from a bundled triple.
+    fn machine_for(triple: &str) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        Machine::assemble(config, &assemble::demu_ctors()).expect("assemble")
+    }
+
+    /// Boot one machine with one synthetic image on the cart and, when
+    /// present, a synthetic BIOS image.
+    pub(super) fn booted(triple: &str, cart: Vec<u8>, bios: Option<Vec<u8>>) -> Machine {
+        let mut machine = machine_for(triple);
+        machine
+            .override_boot("cart", demu_config::model::BootState::Hex { bytes: cart })
+            .expect("boot cart");
+        if let Some(bytes) = bios {
+            let name = machine
+                .config
+                .devices
+                .iter()
+                .find(|d| d.kind.as_str() == "atari.rom")
+                .map(|d| d.name.to_string())
+                .expect("bios device");
+            machine
+                .override_boot(&name, demu_config::model::BootState::Hex { bytes })
+                .expect("boot bios");
+        }
+        machine.boot();
+        machine
+    }
+
+    pub(super) fn cpu_pc(machine: &Machine) -> u16 {
+        let regs = machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers();
+        u16::try_from(regs["PC"]).expect("pc fits")
+    }
+
+    /// The 2600 kernel: a reset that clears the TIA, writes the
+    /// background and playfield colors, then loops over WSYNC.
+    pub(super) fn vcs_program() -> Vec<u8> {
+        let mut rom = vec![0u8; 4096];
+        let code: &[u8] = &[
+            0x78, // SEI
+            0xA2, 0xFF, 0x9A, // LDX #$FF, TXS
+            0xA9, 0x48, 0x8D, 0x09, 0x00, // LDA #$48, STA COLUBK: sky blue
+            0xA9, 0x2E, 0x8D, 0x08, 0x00, // LDA #$2E, STA COLUPF: gold
+            0xA9, 0xF0, 0x8D, 0x0D, 0x00, // LDA #$F0, STA PF0
+            0xA9, 0xFF, 0x8D, 0x0E, 0x00, // LDA #$FF, STA PF1
+            0x8D, 0x02, 0x00, // loop: STA WSYNC
+            0x4C, 0x18, 0xF0, // JMP loop
+        ];
+        rom[..code.len()].copy_from_slice(code);
+        rom[0x0FFC] = 0x00;
+        rom[0x0FFD] = 0xF0;
+        rom
+    }
+
+    #[test]
+    fn vcs_boots_through_cart_vector() {
+        let mut machine = booted("mos6502-atari-2600", vcs_program(), None);
+        machine.run_until(Tick(2_000_000));
+        let pc = cpu_pc(&machine);
+        assert!(
+            (0xF018..=0xF01E).contains(&pc),
+            "the kernel loops at the WSYNC, pc={pc:#06x}"
+        );
+        // The TIA composed whole frames.
+        let frames = machine
+            .device_by_name("tia")
+            .and_then(|d| d.video())
+            .map(|v| v.frames())
+            .expect("tia");
+        assert!(frames >= 24, "frames={frames}");
+    }
+
+    #[test]
+    fn vcs_playfield_renders_and_determines_screenshot() {
+        let mut one = booted("mos6502-atari-2600", vcs_program(), None);
+        one.run_until(Tick(2_000_000));
+        let mut two = booted("mos6502-atari-2600", vcs_program(), None);
+        two.run_until(Tick(2_000_000));
+        let v = one
+            .device_by_name("tia")
+            .and_then(|d| d.video())
+            .and_then(|v| v.dump_layer(demu_core::device::VideoLayer::Framebuffer))
+            .expect("framebuffer");
+        assert!(v.iter().any(|b| *b != 0), "the playfield paints pixels");
+        let w = two
+            .device_by_name("tia")
+            .and_then(|d| d.video())
+            .expect("video")
+            .frame()
+            .expect("frame")
+            .pixels
+            .clone();
+        assert_eq!(v, w, "two runs compose identical frames");
+    }
+
+    #[test]
+    fn vcs_saves_and_restores_mid_kernel() {
+        let mut machine = booted("mos6502-atari-2600", vcs_program(), None);
+        machine.run_until(Tick(1_000_000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        let mut twin = machine_for("mos6502-atari-2600");
+        twin.override_boot(
+            "cart",
+            demu_config::model::BootState::Hex {
+                bytes: vcs_program(),
+            },
+        )
+        .expect("boot cart");
+        twin.boot();
+        twin.load(&buf).expect("load");
+        twin.run_until(Tick(2_000_000));
+        machine.run_until(Tick(2_000_000));
+        let a = machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers();
+        let b = twin
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers();
+        assert_eq!(a["PC"], b["PC"]);
+        assert_eq!(a["A"], b["A"]);
+    }
+
+    /// The 5200 BIOS: the minimal power-up that jumps through the cart
+    /// vector at $BFFE. The reset vector at $FFFC points into it.
+    pub(super) fn bios5200() -> Vec<u8> {
+        let mut rom = vec![0xFFu8; 0x800]; // $F800-$FFFF
+        let reset: &[u8] = &[
+            0x78, // SEI
+            0xA2, 0xFF, 0x9A, // LDX #$FF, TXS
+            0x6C, 0xFE, 0xBF, // JMP ($BFFE)
+        ];
+        rom[0x780..0x780 + reset.len()].copy_from_slice(reset);
+        rom[0x7FC] = 0x80; // $FFFC low
+        rom[0x7FD] = 0xFF; // $FFFD high
+        rom
+    }
+
+    /// The 5200 cart: sets up one display list of two mode-two lines
+    /// in the RAM at $2000, enables DMA, then idles with a JVB.
+    pub(super) fn cart5200() -> Vec<u8> {
+        let mut rom = vec![0u8; 32 * 1024];
+        // The program: enable the display list DMA at $2016, paint
+        // colors, then idle.
+        let code: &[u8] = &[
+            0xA9, 0x22, 0x8D, 0x00, 0xD4, // LDA #$22, STA DMACTL: normal width
+            0xA9, 0x16, 0x8D, 0x02, 0xD4, // LDA #$16, STA DLISTL: $2016
+            0xA9, 0x20, 0x8D, 0x03, 0xD4, // STA DLISTH
+            0xA9, 0x2A, 0x8D, 0x16, 0xC0, // LDA #$2A, STA COLPF0
+            0xA9, 0x54, 0x8D, 0x1A, 0xC0, // LDA #$54, STA COLBK
+            0xA9, 0x42, 0x8D, 0x16, 0x20, // $2016 = $42: mode line with LMS
+            0xA9, 0x20, 0x8D, 0x17, 0x20, // $2017 = $20: the scan low
+            0x8D, 0x18, 0x20, // $2018 = $20: the scan high
+            0xA9, 0x02, 0x8D, 0x19, 0x20, // $2019 = $02: one more mode line
+            0xA9, 0x41, 0x8D, 0x1A, 0x20, // $201A = $41: JVB
+            0xA9, 0x16, 0x8D, 0x1B, 0x20, // $201B = $16: the loop low
+            0xA9, 0x20, 0x8D, 0x1C, 0x20, // $201C = $20: back to $2016
+            0xA9, 0xAA, 0x8D, 0x20, 0x20, // $2020 = $AA: the pixel byte
+            0xEA, 0x4C, 0x40, 0x40, // idle: NOP; JMP $4040, self
+        ];
+        rom[..code.len()].copy_from_slice(code);
+        // The cart vectors sit at $BFFE/$BFFF: image offsets 0x7FFE
+        // and 0x7FFF in a flat 32-KiB image based at $4000.
+        rom[0x7FFD] = 0xFF; // The diagnostic flag: not set high.
+        rom[0x7FFE] = 0x00;
+        rom[0x7FFF] = 0x40; // JMP target: $4000
+        rom
+    }
+
+    #[test]
+    fn atari5200_boots_bios_then_cart() {
+        let mut machine = booted("mos6502-atari-5200", cart5200(), Some(bios5200()));
+        machine.run_until(Tick(10_000_000));
+        let pc = cpu_pc(&machine);
+        assert_eq!(pc, 0x4040, "the cart program idles, pc={pc:#06x}");
+        // The DMACTL landed through the bus.
+        let dmactl = machine
+            .device_by_name("antic")
+            .and_then(|d| d.as_any().downcast_ref::<demu_dev_video::Antic>())
+            .map(|a| a.dmactl())
+            .expect("antic");
+        assert_eq!(dmactl & 0x20, 0x20, "the display list DMA armed");
+    }
+
+    #[test]
+    fn atari5200_display_list_walks() {
+        let mut machine = booted("mos6502-atari-5200", cart5200(), Some(bios5200()));
+        machine.run_until(Tick(10_000_000));
+        // The mode lines of one display window: poll line advances,
+        // because a three-instruction list is active only briefly.
+        let mut saw_mode = false;
+        let mut scan_max = 0u16;
+        for i in 0..300u64 {
+            machine.run_until(Tick(11_000_000 + 456 * i));
+            let a = machine
+                .device_by_name("antic")
+                .and_then(|d| d.as_any().downcast_ref::<demu_dev_video::Antic>())
+                .expect("antic");
+            saw_mode |= a.dl_mode().is_some();
+            scan_max = scan_max.max(a.mem_scan());
+        }
+        assert!(saw_mode, "a mode line became active");
+        assert!(scan_max > 0x2016, "the scan pointer advanced past the list");
+        // Picture row zero paints the border and the pattern colors.
+        let v = machine
+            .device_by_name("antic")
+            .and_then(|d| d.as_any().downcast_ref::<demu_dev_video::Antic>())
+            .and_then(|a| a.video())
+            .and_then(|v| v.dump_layer(demu_core::device::VideoLayer::Framebuffer))
+            .expect("framebuffer");
+        let row: std::collections::BTreeSet<_> = v[0..320 * 3]
+            .chunks(3)
+            .map(|c| (c[0], c[1], c[2]))
+            .collect();
+        assert!(row.len() > 1, "the mode line painted the picture row");
+    }
+
+    #[test]
+    fn atari5200_saves_and_restores() {
+        let mut machine = booted("mos6502-atari-5200", cart5200(), Some(bios5200()));
+        machine.run_until(Tick(5_000_000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        let mut twin = machine_for("mos6502-atari-5200");
+        twin.override_boot(
+            "cart",
+            demu_config::model::BootState::Hex { bytes: cart5200() },
+        )
+        .expect("boot cart");
+        let bios_name = twin
+            .config
+            .devices
+            .iter()
+            .find(|d| d.kind.as_str() == "atari.rom")
+            .map(|d| d.name.to_string())
+            .expect("bios");
+        twin.override_boot(
+            &bios_name,
+            demu_config::model::BootState::Hex { bytes: bios5200() },
+        )
+        .expect("boot bios");
+        twin.boot();
+        twin.load(&buf).expect("load");
+        twin.run_until(Tick(10_000_000));
+        machine.run_until(Tick(10_000_000));
+        let a = machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers();
+        let b = twin
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers();
+        assert_eq!(a["PC"], b["PC"]);
+        let sa = machine
+            .device_by_name("antic")
+            .and_then(|d| d.as_any().downcast_ref::<demu_dev_video::Antic>())
+            .map(|a| a.dlist())
+            .expect("antic");
+        let sb = twin
+            .device_by_name("antic")
+            .and_then(|d| d.as_any().downcast_ref::<demu_dev_video::Antic>())
+            .map(|a| a.dlist())
+            .expect("antic");
+        assert_eq!(sa, sb);
+    }
+
+    /// The 7800 BIOS: the minimal power-up that hands execution to
+    /// the cart through its start vector at $FFFC.
+    pub(super) fn bios7800() -> Vec<u8> {
+        let mut rom = vec![0xFFu8; 0x1000]; // $C000-$CFFF
+        let code: &[u8] = &[
+            0x78, 0xA2, 0xFF, 0x9A, // SEI, LDX #$FF, TXS
+            0x6C, 0xFC, 0xFF, // JMP ($FFFC)
+        ];
+        rom[..7].copy_from_slice(code);
+        rom
+    }
+
+    /// The 7800 cart: a 48-KiB flat image filling $4000-$FFFF. It
+    /// sets up MARIA with a display list list of one zone, then idles.
+    /// The reset vector at $FFFC (image offsets 0xBFFC/0xBFFD) points
+    /// at the program start.
+    pub(super) fn cart7800() -> Vec<u8> {
+        let mut rom = vec![0u8; 48 * 1024];
+        let code: &[u8] = &[
+            0xA9, 0x22, 0x8D, 0x20, 0x00, // LDA #$22, STA BACKGRND
+            0xA9, 0x84, 0x8D, 0x21, 0x00, // LDA #$84, STA P0C1: blue vs the red background
+            0xA9, 0x40, 0x8D, 0x3C, 0x00, // LDA #$40, STA CTRL: normal DMA
+            0xA9, 0x60, 0x8D, 0x30, 0x00, // LDA #$60, STA DPPL: DLL at $1860
+            0xA9, 0x18, 0x8D, 0x2C, 0x00, // LDA #$18, STA DPPH
+            // The display list list entry at $1860: one line, DL at
+            // $1850; the bytes carry the address high then low.
+            0xA9, 0x00, 0x8D, 0x60, 0x18, // LDA #$00, STA $1860: count 0
+            0xA9, 0x18, 0x8D, 0x61, 0x18, // STA $1861: the DL address high
+            0xA9, 0x50, 0x8D, 0x62, 0x18, // STA $1862: the DL address low
+            // The display list header at $1850: four bytes, one data
+            // byte at $1870.
+            0xA9, 0x70, 0x8D, 0x50, 0x18, // LDA #$70, STA $1850 (addr lo)
+            0xA9, 0x1F, 0x8D, 0x51, 0x18, // LDA #$1F, STA $1851: palette 0, width 1
+            0xA9, 0x18, 0x8D, 0x52, 0x18, // STA $1852 (addr hi)
+            0xA9, 0x40, 0x8D, 0x53, 0x18, // LDA #$40, STA $1853 (hpos)
+            0xA9, 0x55, 0x8D, 0x70, 0x18, // LDA #$55, STA $1870: color code one = P0C1
+            0x4C, 0x41, 0x40, // idle: JMP $4041, self
+        ];
+        rom[..code.len()].copy_from_slice(code);
+        rom[0xBFFC] = 0x00; // $FFFC low
+        rom[0xBFFD] = 0x40; // $FFFD high: $4000
+        rom
+    }
+
+    #[test]
+    fn atari7800_boots_bios_then_cart() {
+        let mut machine = booted("mos6502-atari-7800", cart7800(), Some(bios7800()));
+        machine.run_until(Tick(10_000_000));
+        let pc = cpu_pc(&machine);
+        assert!(pc == 0x4041, "the cart program idles, pc={pc:#06x}");
+    }
+
+    #[test]
+    fn atari7800_maria_composes_frame() {
+        let mut machine = booted("mos6502-atari-7800", cart7800(), Some(bios7800()));
+        machine.run_until(Tick(10_000_000));
+        let m = machine
+            .device_by_name("maria")
+            .and_then(|d| d.as_any().downcast_ref::<demu_dev_video::Maria>())
+            .expect("maria");
+        assert!(m.video().expect("video").frames() >= 10);
+        let frame = m.video().expect("video").frame().expect("frame");
+        assert_eq!((frame.width, frame.height), (320, 192));
+        let fb = m
+            .video()
+            .and_then(|v| v.dump_layer(demu_core::device::VideoLayer::Framebuffer))
+            .expect("framebuffer");
+        assert_eq!(fb.len(), 320 * 192 * 3);
+        // The count-zero zone walks on the raster before the visible
+        // window and paints exactly the frame's first row: the entry's
+        // one data byte covers columns 64..67 of the 160-column grid,
+        // two screen pixels each, from x 128 through 135. The graphics
+        // byte $55 selects color code one per pixel, so the region
+        // shows P0C1 while everything else shows BACKGRND; the zero
+        // terminator behind the zone keeps the lower rows plain.
+        let bg = demu_dev_video::tia_color_rgb(0x22, 4);
+        let fg = demu_dev_video::tia_color_rgb(0x84, 4);
+        assert_ne!(bg, fg, "the fixture names two distinct TIA colors");
+        let px = |x: usize, y: usize| {
+            let base = (y * 320 + x) * 3;
+            [fb[base], fb[base + 1], fb[base + 2]]
+        };
+        for x in 128..136 {
+            assert_eq!(px(x, 0), fg, "x={x} shows the painted P0C1 region");
+        }
+        assert_eq!(
+            px(127, 0),
+            bg,
+            "the column left of the region stays background"
+        );
+        assert_eq!(
+            px(136, 0),
+            bg,
+            "the column right of the region stays background"
+        );
+        for y in 1..192 {
+            for x in [0usize, 64, 127, 128, 136, 200, 319] {
+                assert_eq!(px(x, y), bg, "({x},{y}) stays background");
+            }
+        }
+    }
+
+    #[test]
+    fn atari7800_saves_and_restores() {
+        let mut machine = booted("mos6502-atari-7800", cart7800(), Some(bios7800()));
+        machine.run_until(Tick(5_000_000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        let mut twin = machine_for("mos6502-atari-7800");
+        twin.override_boot(
+            "cart",
+            demu_config::model::BootState::Hex { bytes: cart7800() },
+        )
+        .expect("boot cart");
+        twin.override_boot(
+            "bios",
+            demu_config::model::BootState::Hex { bytes: bios7800() },
+        )
+        .expect("boot bios");
+        twin.boot();
+        twin.load(&buf).expect("load");
+        twin.run_until(Tick(10_000_000));
+        machine.run_until(Tick(10_000_000));
+        let a = cpu_pc(&machine);
+        let b = cpu_pc(&twin);
+        assert_eq!(a, b);
+    }
+}

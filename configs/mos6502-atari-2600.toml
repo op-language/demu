@@ -1,0 +1,95 @@
+# Atari 2600, NTSC: the 6507 at one third of the color clock.
+#
+# One clock domain at the color clock, 315000000/88 Hz, the 3.579545
+# MHz crystal of the NTSC TIA. The CPU divides by three and the TIA
+# walks one color clock per visit. The 6507 interrupts no lines: the
+# config connects no IRQ and no NMI, so the core idles without them.
+
+[system]
+name = "Atari 2600"
+triple = "mos6502-atari-2600"
+description = "The NTSC Atari 2600 with the TIA and the RIOT 6532."
+
+[clock.main]
+frequency = "315000000/88"
+origin = "NTSC color clock; the CPU cycle is 3 ticks and the TIA dot 1 tick"
+
+[[device]]
+name = "cpu0"
+kind = "mos6502.cpu"
+domain = "main"
+[device.dividers]
+cpu = 3
+
+[[device]]
+name = "tia"
+kind = "atari.tia"
+domain = "main"
+[device.dividers]
+dot = 1
+
+[[device]]
+name = "riot"
+kind = "atari.riot"
+domain = "main"
+[device.dividers]
+cpu = 3
+
+[[device]]
+name = "cart"
+kind = "atari.cart2600"
+domain = "main"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+# The TIA answers the even 128-byte pages of the first 1 KiB; the RIOT
+# RAM the odd pages; the RIOT registers at $0280 with one mirrored
+# page; the cartridge fills $1000-$FFFF in 4-KiB repeats.
+[[window]]
+name = "w_tia"
+bus = "cpu"
+device = "tia"
+base = "0x0000"
+size = "0x0080"
+mirror_stride = "0x0100"
+mirror_count = 7
+
+[[window]]
+name = "w_riotram"
+bus = "cpu"
+device = "riot"
+base = "0x0080"
+size = "0x0080"
+mirror_stride = "0x0100"
+mirror_count = 7
+
+[[window]]
+name = "w_riotio"
+bus = "cpu"
+device = "riot"
+base = "0x0280"
+size = "0x0020"
+mirror_stride = "0x0400"
+mirror_count = 1
+
+[[window]]
+name = "w_cart"
+bus = "cpu"
+device = "cart"
+base = "0x1000"
+size = "0x1000"
+mirror_stride = "0x1000"
+mirror_count = 15
+
+# The WSYNC strobe holds the CPU until the next line through the halt
+# line; the RIOT timer walks CPU cycles on the same divider.
+[[connection]]
+from = "tia.halt"
+to = "cpu0.halt"
+semantics = "dma-request"
+
+[quirks]
+"mos6502.undocumented" = true

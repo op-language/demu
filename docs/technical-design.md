@@ -586,3 +586,58 @@ record the deviations and the details the design leaves open.
 - The PAL region uses the same structure with the PAL sequencer
   steps, the PAL DMC and noise tables, and the divider of the region's
   crystal.
+## 20. As-built notes: Atari 2600, 5200, 7800
+
+The three machine families share one color clock: 315000000/88 Hz. The
+2600 domain is the color clock itself; the 5200 and the 7800 domains
+carry the double-rate master of 315000000/44 Hz, with the color clock
+divided by two and the CPU by four.
+
+- The CPU of all three is the plain 6502 kind with a divider override:
+  three ticks on the 2600 (the 6507), four on the 5200 and the 7800
+  (SALLY). The 6507 connects no interrupt lines. The `undocumented`
+  quirk flag is on: NES-era games and Atari games use the opcodes.
+- TIA walks one color clock per visit in the 2600 form. Position
+  counters follow the TIA hardware notes: the register strobes re-base
+  at the beam with the decode delay, copies follow the NUSIZ layout,
+  and the HMOVE strobe shifts each object by `8 - (HMX ^ 0x08)`.
+  The TIA sound engine follows the published divider model with the
+  poly taps and the 13:18 Div-31 duty, ticked at the 31.4 kHz audio
+  clock. The 7800 keeps the same device with the video parameter off.
+- The collision bits follow the published register map, but the pairs
+  that the matrix reports are simplified: a missile reports its hit
+  against either player of its register, and the priority table picks
+  the first matching layer. Cycle-precision collision positions and
+  the response-register quirks are a follow-up verification pass.
+- RIOT 6532 carries 128 bytes of RAM, the interval timer with the
+  zero-hold and fast-wrap phases, and the port registers. The read of
+  INTIM or INTFLG that clears the flag reverts the wrap mode; the
+  exact hardware edge alignment of that revert is approximate.
+- The 5200 display pipeline is one device: the ANTIC display-list
+  processor and the GTIA register file compose together, because the
+  pixel output is internal to the die pair. The GTIA file answers
+  $C000 and the ANTIC file answers $D400. The display list walks at
+  the line start; the DMA bytes are stolen machine cycles of one halt
+  pulse, not the intra-line interleave of the real circuit.
+- The 5200 map: 16 KiB RAM at $0000, the flat 32 KiB cart window at
+  $4000 end-aligned so $BFFE carries the start vector, GTIA at $C000,
+  ANTIC at $D400, POKEY at $E800, and the 2 KiB BIOS at $F800.
+- The 7800 map: TIA at $0000, MARIA at $0020, the RAM shadow of the
+  zero page and the stack page, the RIOT at $0280, main RAM at
+  $1800-$27FF, the cart at $4000-$BFFF and $D000-$FFFF, and the BIOS
+  at $C000. MARIA walks one pixel clock per master tick, 456 cycles
+  per line. The display list list entries, the direct mode entries,
+  and the 160A/B encodings run per the GCC software guide; the
+  320-pixel encodings, the character modes, holey DMA, and the
+  Kangaroo and border control bits decode but are not exhaustively
+  verified. Cart banking: flat images map down from $FFFF; banked
+  images page 16-KiB chunks into $8000-$BFFF from the written value;
+  the audio-cartridge variants are out of the set.
+- POKEY carries the channel dividers with the joined sixteen-bit
+  pairs, the seventeen-bit and nine-bit global polys, the four-bit
+  and five-bit per-channel polys, the keyboard-code register with the
+  key interrupt, and the IRQ mask with the write-to-acknowledge rule.
+  The serial port and the pot scan timing are stubs.
+- Per-console test-ROM patterns and BIOS checksum runs remain pending
+  a follow-up evidence pass with real ROM assets; the acceptance
+  programs of this phase are synthetic images with recorded outputs.

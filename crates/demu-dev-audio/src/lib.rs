@@ -8,8 +8,10 @@
 //! in a sample buffer for the media pipeline.
 
 pub mod nes;
+pub mod pokey;
 
 pub use nes::NesApu;
+pub use pokey::Pokey;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};

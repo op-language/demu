@@ -1,9 +1,10 @@
 //! The machine assembly.
 //!
 //! The binary composes the device constructors of the machine
-//! families: the Game Boy and Game Boy Color of the SM83 family, and
-//! the NES of the 6502 family. The configuration selects kinds by
-//! name; this registry supplies the compiled constructors.
+//! families: the Game Boy and Game Boy Color of the SM83 family, the
+//! NES of the 6502 family, and the 2600, 5200, and 7800 of the Atari
+//! family. The configuration selects kinds by name; this registry
+//! supplies the compiled constructors.
 
 use demu_config::model::DeviceInstance;
 use demu_core::device::Device;
@@ -26,9 +27,12 @@ pub const CART_KIND: &str = "sm83.cart";
 /// The 6502 family cartridge kinds.
 pub const NES_CART_KINDS: &[&str] = &["rp2A03.cart", "rp2A07.cart", "mos6502.cart"];
 
+/// The Atari family cartridge kinds.
+pub const ATARI_CART_KINDS: &[&str] = &["atari.cart2600", "atari.cart5200", "atari.cart7800"];
+
 /// True for a device kind that carries the cartridge image.
 pub fn is_cart_kind(kind: &str) -> bool {
-    kind == CART_KIND || NES_CART_KINDS.contains(&kind)
+    kind == CART_KIND || NES_CART_KINDS.contains(&kind) || ATARI_CART_KINDS.contains(&kind)
 }
 
 /// The NES cartridge and pixel-processing-unit coupling: the mirror
@@ -95,6 +99,16 @@ pub fn demu_ctors() -> DeviceCtors {
     ctors.register("rp2A07.ppu", Box::new(new_nes_ppu));
     ctors.register("rp2A03.apu", Box::new(new_nes_apu));
     ctors.register("rp2A07.apu", Box::new(new_nes_apu));
+    ctors.register("atari.tia", Box::new(new_atari_tia));
+    ctors.register("atari.riot", Box::new(new_atari_riot));
+    ctors.register("atari.antic", Box::new(new_atari_antic));
+    ctors.register("atari.pokey", Box::new(new_atari_pokey));
+    ctors.register("atari.maria", Box::new(new_atari_maria));
+    ctors.register("atari.ram", Box::new(new_atari_ram));
+    ctors.register("atari.rom", Box::new(new_atari_rom));
+    ctors.register("atari.cart2600", Box::new(new_atari_cart2600));
+    ctors.register("atari.cart5200", Box::new(new_atari_cart5200));
+    ctors.register("atari.cart7800", Box::new(new_atari_cart7800));
     ctors
 }
 
@@ -240,4 +254,82 @@ fn new_nes_apu(
     _config: &demu_config::model::SystemConfig,
 ) -> Result<Box<dyn Device>, MachineError> {
     Ok(Box::new(NesApu::new(device)))
+}
+
+// The Atari device family: the 2600, the 5200, and the 7800.
+
+fn new_atari_tia(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_video::Tia::new(device)))
+}
+
+fn new_atari_riot(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_io::Riot::new(device)))
+}
+
+fn new_atari_antic(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_video::Antic::new(device)))
+}
+
+fn new_atari_pokey(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_audio::Pokey::new(device)))
+}
+
+fn new_atari_maria(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_video::Maria::new(device)))
+}
+
+fn new_atari_ram(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let mut ram = demu_dev_memory::StaticRam::new(device)
+        .map_err(|e| MachineError::Assembly(e.to_string()))?;
+    ram.set_readonly(false);
+    Ok(Box::new(ram))
+}
+
+fn new_atari_rom(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let mut rom = demu_dev_memory::StaticRam::new(device)
+        .map_err(|e| MachineError::Assembly(e.to_string()))?;
+    rom.set_readonly(true);
+    Ok(Box::new(rom))
+}
+
+fn new_atari_cart2600(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_cartridge::Atari2600Cart::new(device)))
+}
+
+fn new_atari_cart5200(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_cartridge::Atari5200Cart::new(device)))
+}
+
+fn new_atari_cart7800(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_cartridge::Atari7800Cart::new(device)))
 }

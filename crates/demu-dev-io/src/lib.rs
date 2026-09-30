@@ -11,8 +11,10 @@
 //! connections.
 
 pub mod nes;
+pub mod riot;
 
 pub use nes::Controller;
+pub use riot::Riot;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};
