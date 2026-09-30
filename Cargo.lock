@@ -35,6 +35,7 @@ version = "0.1.0"
 dependencies = [
  "demu-config",
  "demu-core",
+ "demu-cpu-mos6502",
  "demu-cpu-sm83",
  "demu-dev-audio",
  "demu-dev-cartridge",
@@ -78,6 +79,11 @@ version = "0.1.0"
 [[package]]
 name = "demu-cpu-mos6502"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-cpu-mos65sc02"

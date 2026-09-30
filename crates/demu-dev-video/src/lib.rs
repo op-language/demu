@@ -8,6 +8,10 @@
 //! effects are exact. The CGB adds the second VRAM bank, the color
 //! palettes, and the object priority mode.
 
+pub mod nes;
+
+pub use nes::NesPpu;
+
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, Frame, MachineCtx, VideoLayer, VideoSource};
 use demu_core::frequency::{Address, Tick};
@@ -230,6 +234,7 @@ impl Ppu {
         }
         if mode == 1 {
             ctx.notify("vblank", Level::High, tick);
+            ctx.emit(demu_core::triggers::TriggerEvent::Vblank);
             self.refresh_cached_frame();
             self.frames += 1;
         }

@@ -285,7 +285,14 @@ impl DomainState {
             .map_err(|_| LoadError::Format("domain frequency is invalid"))?;
         let mut domain = ClockDomain::new(&self.name, frequency);
         domain.now = crate::frequency::Tick(self.now);
+        // The sequence counter must stay past every restored event so
+        // that later schedules keep ordering after the restored ones,
+        // as they did in the machine the state came from. Otherwise
+        // new events would tie-break ahead of stored events at the
+        // same tick and reorder device visits after a restore.
+        let mut next_seq = 0u64;
         for (tick, device, seq, generation) in self.events {
+            next_seq = next_seq.max(seq);
             let slot = device as usize;
             while domain.gens.len() <= slot {
                 domain.gens.push(0);
@@ -300,6 +307,7 @@ impl DomainState {
                 generation,
             });
         }
+        domain.next_seq = next_seq;
         Ok(domain)
     }
 }

@@ -47,7 +47,7 @@ pub struct ClockDomain {
     /// The pending events.
     pub queue: std::collections::BinaryHeap<Event>,
     /// The next sequence number for tie-breaking.
-    next_seq: u64,
+    pub(crate) next_seq: u64,
     /// The event generation per device slot; scheduling bumps it, and a
     /// stale event in the heap is discarded on pop.
     pub gens: Vec<u32>,

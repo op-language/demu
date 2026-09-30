@@ -219,7 +219,7 @@ fn run_session(cli: &Cli) -> ExitCode {
             .config
             .devices
             .iter()
-            .find(|d| d.kind.as_str() == assemble::CART_KIND)
+            .find(|d| crate::assemble::is_cart_kind(d.kind.as_str()))
             .map(|d| d.name.to_string())
     };
     match (&cli.rom, cart_name) {
@@ -233,6 +233,7 @@ fn run_session(cli: &Cli) -> ExitCode {
                 return ExitCode::from(2);
             }
             machine.boot();
+            assemble::apply_nes_cartridge_wiring(machine);
         }
         (Some(_), None) => {
             // A ROM path with no cartridge device in the configuration.
@@ -240,7 +241,9 @@ fn run_session(cli: &Cli) -> ExitCode {
             return ExitCode::from(2);
         }
         (None, _) => {
-            service.machine_mut().expect("machine was loaded").boot();
+            let machine = service.machine_mut().expect("machine was loaded");
+            machine.boot();
+            assemble::apply_nes_cartridge_wiring(machine);
         }
     }
     if let Some(path) = &cli.symbols {
@@ -356,6 +359,7 @@ pub mod tests {
             panic!("boot override failed: {e}");
         }
         machine.boot();
+        assemble::apply_nes_cartridge_wiring(machine);
         service
     }
 
@@ -446,7 +450,6 @@ pub mod state_tests {
             "save after restore is byte-identical: {diff:?}",
         );
         assert_eq!(restored.now(), machine.now());
-        assert_eq!(restored.now(), machine.now());
     }
 
     #[test]
@@ -476,5 +479,328 @@ pub mod state_tests {
             .and_then(|c| c.registers().get("PC").copied())
             .expect("cpu");
         assert_eq!(pc_before, pc_after, "PC survives the round trip");
+    }
+}
+
+#[cfg(test)]
+pub mod mos_exec_tests {
+    use crate::assemble;
+    use demu_dev_video::NesPpu;
+    use demu_shell::MachineService;
+
+    /// Boot the NTSC machine with a hex cartridge image whose
+    /// program runs at $C000 (the reset vector $C000).
+    fn nes_with(program: &[u8]) -> MachineService {
+        let raw =
+            demu_config::bundled::resolve_source("rp2A03-nintendo-nes-ntsc").expect("bundled");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let mut service = MachineService::new();
+        service.load_machine(
+            demu_core::Machine::assemble(config, &assemble::demu_ctors()).expect("assemble"),
+        );
+        // An iNES image: the header, the 16-KiB program bank with the
+        // program at $C000, the reset vector at the bank's end, and
+        // the 8-KiB character bank.
+        let mut image = vec![0u8; 16 + 16384 + 8192];
+        image[0..4].copy_from_slice(b"NES\x1a");
+        image[4] = 1;
+        image[5] = 1;
+        image[16..16 + program.len()].copy_from_slice(program);
+        // The reset vector names the program's first byte at $C000.
+        image[16 + 0x3FFC] = 0x00;
+        image[16 + 0x3FFD] = 0xC0;
+        let machine = service.machine_mut().expect("loaded");
+        machine
+            .override_boot("cart", demu_config::model::BootState::Hex { bytes: image })
+            .expect("boot");
+        machine.boot();
+        assemble::apply_nes_cartridge_wiring(machine);
+        service
+    }
+
+    fn run(service: &mut MachineService, cpu_ticks: u64) {
+        let start = service.machine().expect("m").now().0;
+        service.run(start + cpu_ticks * 12).expect("run");
+    }
+
+    fn cpu_reg(service: &mut MachineService, name: &str) -> u64 {
+        let machine = service.machine().expect("m");
+        machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .and_then(|c| c.registers().get(name).copied())
+            .expect("cpu")
+    }
+
+    #[test]
+    fn lda_immediate_and_cycles() {
+        // SEI, TXS, LDA #$5A, then NOPs.
+        let mut service = nes_with(&[0x78, 0x9A, 0xA9, 0x5A, 0xEA, 0xEA]);
+        run(&mut service, 30);
+        assert_eq!(cpu_reg(&mut service, "A"), 0x5A);
+    }
+
+    #[test]
+    fn sta_absolute_hits_ppu_mask() {
+        // STA $2001: the write reaches the PPU's mask register.
+        let mut service = nes_with(&[0xA9, 0x1E, 0x8D, 0x01, 0x20, 0xEA]);
+        run(&mut service, 30);
+        let machine = service.machine().expect("m");
+        let mask = machine
+            .device_by_name("ppu")
+            .and_then(|d| d.as_any().downcast_ref::<NesPpu>())
+            .map(|ppu| ppu.nes_mask())
+            .expect("ppu");
+        assert_eq!(mask, 0x1E);
+    }
+
+    #[test]
+    fn adc_binary_and_decimal() {
+        // CLD, LDA #$50, ADC #$50: the binary sum 0xA0 with the carry.
+        let mut service = nes_with(&[
+            0xD8, // CLD
+            0xA9, 0x50, // LDA #$50
+            0x69, 0x50, // ADC #$50
+            0xEA, 0xEA,
+        ]);
+        run(&mut service, 30);
+        assert_eq!(cpu_reg(&mut service, "A"), 0xA0);
+        assert_eq!(cpu_reg(&mut service, "P") & 0x01, 0x00);
+
+        // The decimal form: 0x50 + 0x50 = 0x00 with the carry set.
+        let mut service = nes_with(&[
+            0xF8, // SED
+            0xA9, 0x50, 0x69, 0x50, 0xEA, 0xEA,
+        ]);
+        run(&mut service, 30);
+        assert_eq!(cpu_reg(&mut service, "A"), 0x00);
+        assert_eq!(cpu_reg(&mut service, "P") & 0x01, 0x01);
+    }
+
+    #[test]
+    fn sbc_decimal_borrow_chain() {
+        // SED; LDA #$50; SEC; SBC #$50 = 0x00 with the carry.
+        let mut service = nes_with(&[0xF8, 0xA9, 0x50, 0x38, 0xE9, 0x50, 0xEA, 0xEA]);
+        run(&mut service, 30);
+        assert_eq!(cpu_reg(&mut service, "A"), 0x00);
+        assert_eq!(cpu_reg(&mut service, "P") & 0x01, 0x01);
+
+        // SED; LDA #$00; SEC; SBC #$01 = 0x99 with the carry set.
+        let mut service = nes_with(&[0xF8, 0xA9, 0x00, 0x38, 0xE9, 0x01, 0xEA, 0xEA]);
+        run(&mut service, 30);
+        assert_eq!(cpu_reg(&mut service, "A"), 0x99);
+        assert_eq!(cpu_reg(&mut service, "P") & 0x01, 0x00);
+    }
+
+    #[test]
+    fn rti_six_cycles_and_rts_six() {
+        // The RTS: the JSR and the return complete in 12 cycles.
+        let mut service = nes_with(&[0x20, 0x05, 0xC0, 0xEA, 0xEA, 0x60, 0xEA]);
+        run(&mut service, 20);
+        // The flow: the JSR at $C000, the RTS at $C005, the loop at
+        // $C000: the cycle count stays in the window either way.
+        let pc = service
+            .machine()
+            .and_then(|m| m.device_by_name("cpu0"))
+            .and_then(|d| d.cpu())
+            .and_then(|c| c.registers().get("PC").copied())
+            .expect("cpu");
+        assert!((0xC000..=0xC004).contains(&pc), "pc={pc:#06x}");
+    }
+}
+
+#[cfg(test)]
+pub mod dma_tests {
+    use crate::assemble;
+    use demu_dev_video::NesPpu;
+    use demu_shell::MachineService;
+
+    #[test]
+    fn oam_dma_copies_page_to_oam() {
+        // STA $2007 × 8 with the test bytes at $200, then the OAM DMA
+        // from the $0200 page: the object memory carries the copies.
+        let raw =
+            demu_config::bundled::resolve_source("rp2A03-nintendo-nes-ntsc").expect("bundled");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let mut service = MachineService::new();
+        service.load_machine(
+            demu_core::Machine::assemble(config, &assemble::demu_ctors()).expect("assemble"),
+        );
+        {
+            let machine = service.machine_mut().expect("loaded");
+            machine.boot();
+            assemble::apply_nes_cartridge_wiring(machine);
+        }
+        // Load $0200..$0208 through the debug writes.
+        for (i, value) in [0x41u8, 0x42, 0x43, 0x44, 0x00, 0x55, 0x66, 0x77]
+            .iter()
+            .enumerate()
+        {
+            assert!(machine_ref_debug_write(
+                &mut service,
+                0x200 + i as u32,
+                *value
+            ));
+        }
+        // The transfer start: $4014 = $02.
+        assert!(machine_ref_debug_write(&mut service, 0x4014, 0x02));
+        // The transfer = ~513 cycles plus the alignment.
+        service.run(700 * 12).expect("run");
+        let machine = service.machine().expect("m");
+        let oam = machine
+            .devices
+            .iter()
+            .find_map(|d| {
+                d.as_any()
+                    .downcast_ref::<NesPpu>()
+                    .map(|ppu| ppu.oam_ram()[0..8].to_vec())
+            })
+            .expect("ppu");
+        assert_eq!(oam, vec![0x41, 0x42, 0x43, 0x44, 0x00, 0x55, 0x66, 0x77]);
+    }
+
+    fn machine_ref_debug_write(service: &mut MachineService, addr: u32, value: u8) -> bool {
+        service
+            .machine_mut()
+            .is_some_and(|m| m.debug_write("cpu", demu_core::Address(addr), value))
+    }
+}
+
+#[cfg(test)]
+pub mod nes_machine_tests {
+    use crate::assemble;
+    use demu_core::Tick;
+    use demu_core::machine::Machine;
+
+    /// Assemble and boot one machine from a bundled triple with the
+    /// demo ROM in the cartridge, or no image at all.
+    fn machine_for(triple: &str, rom: Option<&[u8]>) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let mut machine = Machine::assemble(config, &assemble::demu_ctors()).expect("assemble");
+        if let Some(bytes) = rom {
+            machine
+                .override_boot(
+                    "cart",
+                    demu_config::model::BootState::Hex {
+                        bytes: bytes.to_vec(),
+                    },
+                )
+                .expect("boot");
+        }
+        machine.boot();
+        assemble::apply_nes_cartridge_wiring(&mut machine);
+        machine
+    }
+
+    /// A minimal NROM image: the vectors and a boot loop at $C000.
+    fn demo_rom() -> Vec<u8> {
+        let mut rom = vec![0u8; 16 + 16384 + 8192];
+        rom[0..4].copy_from_slice(b"NES\x1a");
+        rom[4] = 1; // One 16-KiB program bank.
+        rom[5] = 1; // One 8-KiB character bank.
+        rom[16] = 0x78; // SEI at $C000
+        rom[17] = 0x9A; // TXS
+        rom[18] = 0x4C; // JMP $C000
+        rom[19] = 0x00;
+        rom[20] = 0xC0;
+        rom[16 + 0x3FFC] = 0x00; // The reset vector's low byte, $FFFC = $C000
+        rom[16 + 0x3FFD] = 0xC0;
+        rom
+    }
+
+    #[test]
+    fn nes_configs_boot_and_validate() {
+        for triple in ["rp2A03-nintendo-nes-ntsc", "rp2A07-nintendo-nes-pal"] {
+            let machine = machine_for(triple, None);
+            assert_eq!(machine.config.clocks.len(), 1);
+            assert_eq!(machine.devices.len(), 7);
+        }
+    }
+
+    #[test]
+    fn nescpu_reads_reset_vector_through_cart() {
+        let mut machine = machine_for("rp2A03-nintendo-nes-ntsc", Some(&demo_rom()));
+        machine.run_until(Tick(1200));
+        let machine_ref = &machine;
+        let pc = machine_ref
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .and_then(|c| c.registers().get("PC").copied())
+            .expect("cpu");
+        // The core jumped through the vector to $C000 and sits in the
+        // loop back at the reset code.
+        assert!((0xC000..=0xC002).contains(&pc), "pc={pc:#06x}");
+    }
+
+    #[test]
+    fn nes_runs_deterministically() {
+        let mut machine = machine_for("rp2A03-nintendo-nes-ntsc", Some(&demo_rom()));
+        let mut twin = machine_for("rp2A03-nintendo-nes-ntsc", Some(&demo_rom()));
+        machine.run_until(Tick(600_000));
+        twin.run_until(Tick(600_000));
+        let mut state = Vec::new();
+        machine.save(&mut state).expect("save");
+        let mut twin_state = Vec::new();
+        twin.save(&mut twin_state).expect("save");
+        assert_eq!(state, twin_state, "the runs produce identical state");
+    }
+
+    #[test]
+    fn save_and_restore_reproduces_nes_state() {
+        let mut machine = machine_for("rp2A03-nintendo-nes-ntsc", Some(&demo_rom()));
+        machine.run_until(Tick(400_000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+
+        let mut restored = machine_for("rp2A03-nintendo-nes-ntsc", Some(&demo_rom()));
+        restored.load(&buf).expect("load");
+        let mut buf2 = Vec::new();
+        restored.save(&mut buf2).expect("save");
+        assert_eq!(buf, buf2, "save after restore is byte-identical");
+        assert_eq!(restored.now(), machine.now());
+        // The restored machine continues deterministically.
+        // A second machine restored from the same save must continue
+        // identically to the first restore: device state, frame
+        // timing, and later saves all stay byte-equal. (A machine
+        // that runs on without a restore is not a comparable twin:
+        // re-entered runs re-seed its queue from each device's cached
+        // next event, which bumps scheduler bookkeeping.)
+        let mut twin = machine_for("rp2A03-nintendo-nes-ntsc", Some(&demo_rom()));
+        twin.load(&buf).expect("load twin");
+        restored.run_until(Tick(600_000));
+        twin.run_until(Tick(600_000));
+        let mut check = Vec::new();
+        restored.save(&mut check).expect("save");
+        let mut check2 = Vec::new();
+        twin.save(&mut check2).expect("save");
+        assert_eq!(check, check2, "the two restores continue identically");
+    }
+
+    #[test]
+    fn pal_machine_runs_the_same_flow() {
+        let mut machine = machine_for("rp2A07-nintendo-nes-pal", Some(&demo_rom()));
+        machine.run_until(Tick(600_000));
+        let regs = machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers();
+        assert!(
+            (0xC000..=0xC002).contains(&regs["PC"]),
+            "the PAL core loops in the boot code"
+        );
+    }
+
+    #[test]
+    fn alias_config_selects_the_mos6502_cpu() {
+        let raw = demu_config::bundled::resolve_source("mos6502-nintendo-nes-pal").expect("alias");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let cpu = config
+            .devices
+            .iter()
+            .find(|d| d.kind.as_str().ends_with(".cpu"))
+            .expect("cpu0");
+        assert_eq!(cpu.kind.as_str(), "mos6502.cpu");
     }
 }

@@ -1,0 +1,24 @@
+# The plain 6502 view of the PAL NES.
+#
+# This alias extends the RP2A07 PAL config and overrides the CPU kind
+# to the region-parameterized mos6502.cpu with the PAL flag set.
+
+[system]
+name = "Nintendo NES (PAL, plain 6502)"
+triple = "mos6502-nintendo-nes-pal"
+description = "The PAL NES machine viewed as a plain MOS 6502."
+
+[extends]
+base = "rp2A07-nintendo-nes-pal"
+
+[[device]]
+name = "cpu0"
+kind = "mos6502.cpu"
+domain = "main"
+[device.params]
+pal = true
+[device.dividers]
+cpu = 16
+
+[quirks]
+"mos6502.undocumented" = true

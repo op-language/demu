@@ -7,6 +7,10 @@
 //! timer counts at the CPU's T-cycle rate, and the mixed output lands
 //! in a sample buffer for the media pipeline.
 
+pub mod nes;
+
+pub use nes::NesApu;
+
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};
 use demu_core::frequency::{Address, Tick};

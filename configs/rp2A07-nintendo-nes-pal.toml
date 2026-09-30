@@ -1,0 +1,172 @@
+# Nintendo Entertainment System, PAL (RP2A07), the canonical config.
+#
+# One clock domain at the PAL master crystal, 53203425/2 Hz, which is
+# the 26.6017125 MHz crystal of the 2C07. The CPU divides by 16 and
+# the PPU dot clock by 5, so one CPU cycle spans 3.2 dots. The frame
+# runs 312 scanlines of 341 dots with no skipped dot.
+
+[system]
+name = "Nintendo NES (PAL)"
+triple = "rp2A07-nintendo-nes-pal"
+description = "The 1.66 MHz Ricoh 2A07 PAL NES with the 2C07 PPU."
+
+[clock.main]
+frequency = "53203425/2"
+origin = "PAL master crystal; the CPU cycle is 16 ticks and the PPU dot 5 ticks"
+
+[[device]]
+name = "cpu0"
+kind = "rp2A07.cpu"
+domain = "main"
+[device.dividers]
+cpu = 16
+
+[[device]]
+name = "ppu"
+kind = "rp2A07.ppu"
+domain = "main"
+[device.params]
+pattern_bus = "ppu"
+[device.dividers]
+dot = 5
+
+[[device]]
+name = "apu"
+kind = "rp2A07.apu"
+domain = "main"
+[device.dividers]
+cpu = 16
+
+[[device]]
+name = "dma"
+kind = "rp2A07.dma"
+domain = "main"
+[device.dividers]
+cpu = 16
+
+[[device]]
+name = "joypad"
+kind = "rp2A07.joypad"
+domain = "main"
+
+[[device]]
+name = "cart"
+kind = "rp2A07.cart"
+domain = "main"
+
+[[device]]
+name = "wram"
+kind = "rp2A07.wram"
+domain = "main"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[bus]]
+name = "ppu"
+address_bits = 14
+
+[[window]]
+name = "w_wram"
+bus = "cpu"
+device = "wram"
+base = "0x0000"
+size = "0x0800"
+mirror_stride = "0x0800"
+mirror_count = 3
+
+[[window]]
+name = "w_ppu_regs"
+bus = "cpu"
+device = "ppu"
+base = "0x2000"
+size = "0x0008"
+mirror_stride = "0x0008"
+mirror_count = 1023
+
+[[window]]
+name = "w_io"
+bus = "cpu"
+device = "apu"
+base = "0x4000"
+size = "0x20"
+
+[[window]]
+name = "w_oam_dma"
+bus = "cpu"
+device = "dma"
+base = "0x4014"
+size = "0x01"
+overlay = "nesio"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_pads"
+bus = "cpu"
+device = "joypad"
+base = "0x4016"
+size = "0x02"
+overlay = "nesio"
+overlay_read_priority = 1
+
+[[window]]
+name = "w_prg_ram"
+bus = "cpu"
+device = "cart"
+base = "0x6000"
+size = "0x2000"
+
+[[window]]
+name = "w_prg"
+bus = "cpu"
+device = "cart"
+base = "0x8000"
+size = "0x8000"
+
+[[window]]
+name = "w_pattern"
+bus = "ppu"
+device = "cart"
+base = "0x0000"
+size = "0x2000"
+
+[[connection]]
+from = "ppu.nmi"
+to = "cpu0.nmi"
+semantics = "irq"
+
+[[connection]]
+from = "apu.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+[[connection]]
+from = "cart.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+[[connection]]
+from = "ppu.scanline"
+to = "cart.scanline"
+semantics = "display-sync"
+
+[[connection]]
+from = "ppu.vblank"
+to = "cart.vblank"
+semantics = "display-sync"
+
+[[connection]]
+from = "dma.oam_halt"
+to = "cpu0.halt"
+semantics = "dma-request"
+
+[[connection]]
+from = "apu.halt"
+to = "cpu0.halt"
+semantics = "dma-request"
+
+[quirks]
+"rp2A07.undocumented" = true

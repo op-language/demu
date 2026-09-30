@@ -9,6 +9,10 @@
 //! the configured pattern. The MBC3 real-time clock registers are
 //! stored but do not tick.
 
+pub mod nes;
+
+pub use nes::{NesCart, NesHeader, NesMapper};
+
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess};
 use demu_core::frequency::{Address, Tick};

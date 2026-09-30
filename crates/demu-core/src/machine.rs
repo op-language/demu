@@ -318,6 +318,7 @@ impl Machine {
     /// Run the machine until the primary domain reaches `target`.
     pub fn run_until(&mut self, target: Tick) {
         self.seed_queue();
+        self.step_stopped = false;
         loop {
             if !self.step_once(target, &mut |_| false, false) {
                 return;
@@ -332,6 +333,7 @@ impl Machine {
     /// active only while `emit` is true.
     pub fn run_hook(&mut self, target: Tick, hook: RunHook, emit: bool) {
         self.seed_queue();
+        self.step_stopped = false;
         loop {
             if !self.step_once(target, hook, emit) {
                 return;

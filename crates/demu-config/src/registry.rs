@@ -130,6 +130,66 @@ pub fn core_registry() -> &'static KindRegistry {
         }
         r.register(KindInfo::new("sm83.ppu", DomainRequirement::Required, &[]));
         r.register(KindInfo::new("sm83.apu", DomainRequirement::Required, &[]));
+        // The NES device family of the RP2A03 (NTSC) and RP2A07
+        // (PAL). The kind names stay static at the registration
+        // sites; both chip families parameterize one device set.
+        r.register(KindInfo::new(
+            "rp2A03.cpu",
+            DomainRequirement::Required,
+            &["undocumented"],
+        ));
+        r.register(KindInfo::new(
+            "rp2A07.cpu",
+            DomainRequirement::Required,
+            &["undocumented"],
+        ));
+        r.register(KindInfo::new(
+            "mos6502.cpu",
+            DomainRequirement::Required,
+            &["undocumented"],
+        ));
+        for (prefix, kind) in [
+            ("rp2A03", "wram"),
+            ("rp2A07", "wram"),
+            ("mos6502", "wram"),
+            ("rp2A03", "cart"),
+            ("rp2A07", "cart"),
+            ("mos6502", "cart"),
+            ("rp2A03", "dma"),
+            ("rp2A07", "dma"),
+            ("mos6502", "dma"),
+            ("rp2A03", "joypad"),
+            ("rp2A07", "joypad"),
+            ("mos6502", "joypad"),
+            ("rp2A03", "ppu"),
+            ("rp2A07", "ppu"),
+            ("mos6502", "ppu"),
+            ("rp2A03", "apu"),
+            ("rp2A07", "apu"),
+            ("mos6502", "apu"),
+        ] {
+            let key: &'static str = match (prefix, kind) {
+                ("rp2A03", "wram") => "rp2A03.wram",
+                ("rp2A07", "wram") => "rp2A07.wram",
+                ("rp2A03", "cart") => "rp2A03.cart",
+                ("rp2A07", "cart") => "rp2A07.cart",
+                ("rp2A03", "dma") => "rp2A03.dma",
+                ("rp2A07", "dma") => "rp2A07.dma",
+                ("rp2A03", "joypad") => "rp2A03.joypad",
+                ("rp2A07", "joypad") => "rp2A07.joypad",
+                ("rp2A03", "ppu") => "rp2A03.ppu",
+                ("rp2A07", "ppu") => "rp2A07.ppu",
+                ("rp2A03", "apu") => "rp2A03.apu",
+                ("rp2A07", "apu") => "rp2A07.apu",
+                ("mos6502", "wram") => "mos6502.wram",
+                ("mos6502", "cart") => "mos6502.cart",
+                ("mos6502", "dma") => "mos6502.dma",
+                ("mos6502", "joypad") => "mos6502.joypad",
+                ("mos6502", "ppu") => "mos6502.ppu",
+                _ => "mos6502.apu",
+            };
+            r.register(KindInfo::new(key, DomainRequirement::Required, &[]));
+        }
         r
     })
 }
@@ -151,7 +211,16 @@ mod tests {
     fn registry_rejects_unknown() {
         let r = core_registry();
         assert!(r.get(&KindName::new("sm83.ppu").unwrap()).is_some());
-        assert!(r.get(&KindName::new("rp2A03.cpu").unwrap()).is_none());
+        assert!(r.get(&KindName::new("z80.cpu").unwrap()).is_none());
+    }
+
+    #[test]
+    fn nes_kinds_declare_quirks() {
+        let r = core_registry();
+        let cpu = r.get(&KindName::new("rp2A03.cpu").unwrap()).unwrap();
+        assert!(cpu.quirks.contains(&"undocumented"));
+        assert!(r.get(&KindName::new("rp2A07.ppu").unwrap()).is_some());
+        assert!(r.get(&KindName::new("mos6502.cpu").unwrap()).is_some());
     }
 
     #[test]

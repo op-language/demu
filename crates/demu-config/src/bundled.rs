@@ -18,6 +18,18 @@ pub const GAMEBOY: &str = include_str!("../../../configs/sm83-nintendo-gameboy.t
 /// The Game Boy Color.
 pub const GAMEBOY_COLOR: &str = include_str!("../../../configs/sm83-nintendo-gameboy-color.toml");
 
+/// The NES, NTSC.
+pub const NES_NTSC: &str = include_str!("../../../configs/rp2A03-nintendo-nes-ntsc.toml");
+
+/// The NES, PAL.
+pub const NES_PAL: &str = include_str!("../../../configs/rp2A07-nintendo-nes-pal.toml");
+
+/// The plain 6502 view of the NTSC NES.
+pub const NES_NTSC_6502: &str = include_str!("../../../configs/mos6502-nintendo-nes-ntsc.toml");
+
+/// The plain 6502 view of the PAL NES.
+pub const NES_PAL_6502: &str = include_str!("../../../configs/mos6502-nintendo-nes-pal.toml");
+
 /// A bundled config source: the triple name and the embedded text.
 pub struct BundledConfig {
     /// The triple name that selects this config.
@@ -40,10 +52,34 @@ pub const BUNDLED: &[BundledConfig] = &[
         triple: "sm83-nintendo-gameboy-color",
         text: GAMEBOY_COLOR,
     },
+    BundledConfig {
+        triple: "rp2A03-nintendo-nes-ntsc",
+        text: NES_NTSC,
+    },
+    BundledConfig {
+        triple: "rp2A07-nintendo-nes-pal",
+        text: NES_PAL,
+    },
+    BundledConfig {
+        triple: "mos6502-nintendo-nes-ntsc",
+        text: NES_NTSC_6502,
+    },
+    BundledConfig {
+        triple: "mos6502-nintendo-nes-pal",
+        text: NES_PAL_6502,
+    },
 ];
 
 /// Resolve a `--config` argument: a bundled triple name or a file path.
+///
+/// The `[extends]` chain resolves against the bundled configs and files
+/// before the document returns; the caller validates the merged result.
 pub fn resolve_source(selector: &str) -> Result<RawConfig, ConfigError> {
+    let raw = load_raw(selector)?;
+    crate::extends::resolve(&raw, &load_raw)
+}
+
+fn load_raw(selector: &str) -> Result<RawConfig, ConfigError> {
     if let Some(bundled) = BUNDLED.iter().find(|b| b.triple == selector) {
         return RawConfig::parse(bundled.text);
     }

@@ -1,0 +1,174 @@
+# Nintendo Entertainment System, NTSC (RP2A03), the canonical config.
+#
+# One clock domain at the NTSC master crystal, 236250000/11 Hz. The
+# CPU divides by 12 and the PPU dot clock by 4, both of the same
+# crystal, so every device walk carries exact master ticks and the
+# three-dot relationship of the CPU and PPU is exact. The frame runs
+# 89341 dots: 341 dots per scanline over 262 scanlines, minus the
+# skipped last dot of the pre-render scanline on odd frames.
+
+[system]
+name = "Nintendo NES (NTSC)"
+triple = "rp2A03-nintendo-nes-ntsc"
+description = "The 1.79 MHz Ricoh 2A03 NES with the 2C02 PPU."
+
+[clock.main]
+frequency = "236250000/11"
+origin = "NTSC master crystal; the CPU cycle is 12 ticks and the PPU dot 4 ticks"
+
+[[device]]
+name = "cpu0"
+kind = "rp2A03.cpu"
+domain = "main"
+[device.dividers]
+cpu = 12
+
+[[device]]
+name = "ppu"
+kind = "rp2A03.ppu"
+domain = "main"
+[device.params]
+pattern_bus = "ppu"
+[device.dividers]
+dot = 4
+
+[[device]]
+name = "apu"
+kind = "rp2A03.apu"
+domain = "main"
+[device.dividers]
+cpu = 12
+
+[[device]]
+name = "dma"
+kind = "rp2A03.dma"
+domain = "main"
+[device.dividers]
+cpu = 12
+
+[[device]]
+name = "joypad"
+kind = "rp2A03.joypad"
+domain = "main"
+
+[[device]]
+name = "cart"
+kind = "rp2A03.cart"
+domain = "main"
+
+[[device]]
+name = "wram"
+kind = "rp2A03.wram"
+domain = "main"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[bus]]
+name = "ppu"
+address_bits = 14
+
+[[window]]
+name = "w_wram"
+bus = "cpu"
+device = "wram"
+base = "0x0000"
+size = "0x0800"
+mirror_stride = "0x0800"
+mirror_count = 3
+
+[[window]]
+name = "w_ppu_regs"
+bus = "cpu"
+device = "ppu"
+base = "0x2000"
+size = "0x0008"
+mirror_stride = "0x0008"
+mirror_count = 1023
+
+[[window]]
+name = "w_io"
+bus = "cpu"
+device = "apu"
+base = "0x4000"
+size = "0x20"
+
+[[window]]
+name = "w_oam_dma"
+bus = "cpu"
+device = "dma"
+base = "0x4014"
+size = "0x01"
+overlay = "nesio"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_pads"
+bus = "cpu"
+device = "joypad"
+base = "0x4016"
+size = "0x02"
+overlay = "nesio"
+overlay_read_priority = 1
+
+[[window]]
+name = "w_prg_ram"
+bus = "cpu"
+device = "cart"
+base = "0x6000"
+size = "0x2000"
+
+[[window]]
+name = "w_prg"
+bus = "cpu"
+device = "cart"
+base = "0x8000"
+size = "0x8000"
+
+[[window]]
+name = "w_pattern"
+bus = "ppu"
+device = "cart"
+base = "0x0000"
+size = "0x2000"
+
+[[connection]]
+from = "ppu.nmi"
+to = "cpu0.nmi"
+semantics = "irq"
+
+[[connection]]
+from = "apu.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+[[connection]]
+from = "cart.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+[[connection]]
+from = "ppu.scanline"
+to = "cart.scanline"
+semantics = "display-sync"
+
+[[connection]]
+from = "ppu.vblank"
+to = "cart.vblank"
+semantics = "display-sync"
+
+[[connection]]
+from = "dma.oam_halt"
+to = "cpu0.halt"
+semantics = "dma-request"
+
+[[connection]]
+from = "apu.halt"
+to = "cpu0.halt"
+semantics = "dma-request"
+
+[quirks]
+"rp2A03.undocumented" = true

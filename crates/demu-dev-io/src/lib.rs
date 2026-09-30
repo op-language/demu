@@ -10,6 +10,10 @@
 //! delivered edges reach the CPU and the audio device over the declared
 //! connections.
 
+pub mod nes;
+
+pub use nes::Controller;
+
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};
 use demu_core::frequency::{Address, Tick};

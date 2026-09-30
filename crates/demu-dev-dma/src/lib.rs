@@ -6,6 +6,10 @@
 //! CPU, and the HBlank transfer moves one block per HBlank period. Both
 //! stamp every read and write with its exact tick.
 
+pub mod nes;
+
+pub use nes::NesOamDma;
+
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};
 use demu_core::frequency::{Address, Tick};

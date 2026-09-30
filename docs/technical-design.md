@@ -549,3 +549,40 @@ cargo build --workspace
 ```
 
 Documentation phases add `cargo doc --no-deps`.
+## 19. As-built notes: NES
+
+The NES machines of the 6502 family implement this design. The notes
+record the deviations and the details the design leaves open.
+
+- `extends` resolution is wired into the bundled-config loader. A
+  `--config mos6502-nintendo-nes-pal` names a bundled alias document
+  whose base resolves through the bundled list.
+- The NTSC master domain carries `236250000/11` Hz with the CPU on the
+  divider 12 and the PPU dot on 4. The PAL master carries
+  `53203425/2` Hz (26.6017125 MHz) with the dividers 16 and 5.
+- The DMA stall uses a `halt` line: the OAM DMA unit and the DMC
+  reader drop the CPU's ready line for the transfer window and the
+  run loop reschedules the core at the release edge.
+- The PPU drives the `nmi` edge over the declared connection and
+  emits a runtime `Vblank` event every frame, so `run-frame` and
+  `run-until vblank` work on all machines.
+- Register write paths that must reach another device without the
+  machine context queue the access for the next dot visit. The queue
+  is one entry for the pattern-bus write of $2007 and drains before
+  the next dot.
+- The PPU composes one scanline per visit from the register state at
+  the scanline start. Mid-scanline raster effects are not part of the
+  composition.
+- Sprite-zero hit timing and the sprite-overflow bug follow the
+  simplified per-scanline evaluation; the cycle-level evaluation of
+  the secondary OAM is a follow-up.
+- The font renderer of `std` erases its glyph planes through PPU
+  writes to CHR space. A cartridge whose header carries character
+  banks keeps those writes read-only, so the demo renders text with
+  the blank character set. FCEUX behaves the same for this image.
+- The MMC5 support carries the program pages, the character pages,
+  and the scanline IRQ. The extended RAM bank and the split mode are
+  out of the set.
+- The PAL region uses the same structure with the PAL sequencer
+  steps, the PAL DMC and noise tables, and the divider of the region's
+  crystal.
