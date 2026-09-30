@@ -7,8 +7,8 @@ The words MUST, MUST NOT, SHALL, SHALL NOT, and MAY are RFC 2119 words.
 The prose in this document follows ASD-STE100 (strict): short sentences, one
 idea per sentence, active voice, and a controlled vocabulary.
 
-Each later phase reads this document and records as-built notes when the
-design changes.
+Each new machine family reads this document and records as-built
+notes when the design changes.
 
 ## 1. Scope and goals
 
@@ -345,8 +345,8 @@ parameterizes, wires, and boots compiled behavior.
 ## 9. System configuration DSL
 
 The DSL is TOML. The full grammar, field reference, validation rules, and
-`extends` semantics are specified in `docs/dsl-specification.md` (Phase 1
-and Phase 13 deliverables). This section is the summary.
+`extends` semantics are specified in `docs/dsl-specification.md`. This
+section is the summary.
 
 Sections:
 
@@ -641,3 +641,89 @@ divided by two and the CPU by four.
 - Per-console test-ROM patterns and BIOS checksum runs remain pending
   a follow-up evidence pass with real ROM assets; the acceptance
   programs of this phase are synthetic images with recorded outputs.
+
+## 21. As-built notes: Atari 800, Commodore 64, Apple II
+
+The home-computer 6502 machines reuse the Atari display and audio
+devices of the earlier families and add the computer-specific chips.
+
+- The Atari 800 shares the ANTIC and GTIA pair device and the POKEY.
+  The PIA 6520 joins as `atari.pia`: the register map puts the port
+  pair at offsets 0 and 1 and the control pair at 2 and 3, the control
+  bit 2 selects the data register or the direction register, data
+  reads clear the interrupt flag, and the flag arms the line that the
+  config wires in OR with the POKEY interrupt. The two sources drive
+  one shared CPU input, so each notifies only on a level change.
+  Joystick ports live in PORTA active low, with
+  `p0-up`-through-`p1-right` and `-release` input grammar.
+- The 800 NTSC domain carries 315000000/44 Hz with the CPU on divider
+  four and the color clock on two. The PAL domain carries the color
+  clock 7093790/2 Hz with the CPU on two, one color clock per ANTIC
+  visit, and the ANTIC `pal` parameter switches the frame length to
+  312 lines. The 48 KiB RAM
+  answers $0000-$BFFF, the I/O page $D000-$D7FF mirrors the four
+  chip banks, and the 8 KiB OS ROM answers $E000-$FFFF. The XL bank
+  switches, the serial disk of the SIO, and the cartridge slot stay
+  out of the set.
+- The Commodore 64 NTSC domain carries the pixel clock
+  315000000/44 Hz, so one dot is one tick; the CPU divider is seven
+  (1.022727 MHz), the VIC raster line is 455 ticks (65 CPU cycles of
+  the 6567R8 form), and the frame is 263 lines. The PAL form aliases
+  the NTSC base, carries the CPU rate 17734475/18 Hz with one tick
+  per CPU cycle, 63 ticks per line, and 312 lines per frame, and sets
+  the `pal` parameters of the VIC, the SID, and the CIAs. The VIC composes one line per visit through a fetch walk on
+  the primary bus, holds the 1024 color-RAM nibbles behind
+  $D800-$DBFF, and raises the raster interrupt through `vic.irq`.
+  Badline CPU stuns and the per-cycle sprite fetches stay out of the
+  set, in line with the per-line composition model.
+- The SID carries three voices at the CPU rate with the 24-bit phase
+  accumulators, the triangle, saw, pulse, and 23-bit LFSR noise
+  forms, the ring and sync paths, and the attack-decay-sustain-release
+  shape of the rate table. The resonant filter block stays out of the
+  set; the two chip models share the register behavior of this build.
+- The two CIA 6526 devices carry the paired down-count timers with
+  the force-load rule, the time-of-day clock with the alarm compare,
+  the wired shift and flag registers as stubs, and one interrupt
+  each: CIA1 presses the CPU line, CIA2 presses the NMI line. The TOD
+  divider counts CPU-cycle visits: 17045 ticks per pulse of the
+  sixty-pulse NTSC form and the device's own 19705 default for the
+  fifty-pulse PAL form. The keyboard matrix reads through CIA1 port A
+  driving rows and port B reading
+  columns, with injected keys as row-column codes of one byte.
+- The C64 static memory map keeps 64 KiB RAM in segments around the
+  hardware page, the color RAM, the two CIA banks, and the top 4 KiB.
+  The `$01` PLA banking stays store-only: the build carries no BASIC,
+  KERNAL, or character ROM assets, so the banking cannot switch
+  anything and the config documents the flat picture.
+- The four Apple II machines share one memory plan: the console
+  block of `a2.io` answers the `$C0xx` page and the language-card
+  block $D000-$EFFF with its internal 12 KiB and 4 KiB banks that
+  stay invisible until a card switch; the card's upper half behind
+  $E000-$EFFF answers at the device level, and the monitor ROM
+  window keeps that page from the card at the machine level in this
+  build. The video device of `a2.video` owns
+  the display pages $0400-$0BFF and $2000-$5FFF plus the form
+  switches $C050-$C057 over an overlay window, and the monitor ROM
+  answers $F000-$FFFF. The three second members alias the base
+  machine through `extends` and restate only metadata.
+- The Apple video walks 455 dots per line and 262 lines per frame at
+  one dot per visit, with the CPU at seven dots. The text, low-res,
+  and high-res forms compose per line from the owned page bytes, the
+  mixed modes keep the text rows at the bottom, and the colors come
+  from the integer palette of the TIA family.
+- The Disk II joins as `a2.disk2` with the slot-6 window
+  $C0E0-$C0EF over the console page. The four-phase stepper moves the
+  arm a half track per adjacent pulse, the motor and drive select
+  switches latch, the data latch answers $C0EC, and the boot image
+  loads from the device's own boot state. The media reads one raw
+  byte stream per track with no GCR sector framing, and writes latch
+  only. The boot-disk setting of the plan is this device boot state,
+  set through `[boot.disk2]`.
+- The startup-screen acceptance runs one synthetic bring-up image per
+  family: the 800 stub parks in the ANTIC WSYNC loop, the C64 counts
+  raster interrupts through the full IRQ path with a snapshot round
+  trip, and the Apple stub writes the text page and steps the Disk II
+  track. Real OS, KERNAL, and BASIC assets and checksum runs remain
+  pending the follow-up evidence pass, with the serial line checks of
+  POKEY and the CIA; the paddles, buttons, and speaker toggles count
+  as observable stubs.

@@ -9,9 +9,11 @@
 
 pub mod nes;
 pub mod pokey;
+pub mod sid;
 
 pub use nes::NesApu;
 pub use pokey::Pokey;
+pub use sid::Sid;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};

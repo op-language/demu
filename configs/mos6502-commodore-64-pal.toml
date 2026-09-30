@@ -1,0 +1,66 @@
+# Commodore 64, PAL: the same machine as the NTSC form with the PAL
+# region figures. The plan's canonical PAL C64 rate runs the CPU at
+# 17734475/18 Hz = 985248.6 Hz; the domain carries the CPU rate, so
+# one CPU cycle is one tick. The VIC-II walks 63 CPU cycles per line
+# and 312 lines per frame. The static memory map and the store-only
+# PLA banking of the NTSC form carry over through the aliasing.
+
+[clock.main]
+frequency = "17734475/18"
+origin = "PAL CPU rate 985248.6 Hz; one CPU cycle is one tick"
+
+[system]
+name = "Commodore 64 (PAL)"
+triple = "mos6502-commodore-64-pal"
+description = "The PAL Commodore 64 with the VIC-II of the 50 Hz form, the SID, and the two CIAs."
+
+[extends]
+base = "mos6502-commodore-64"
+
+[[device]]
+name = "cpu0"
+kind = "mos6502.cpu"
+domain = "main"
+[device.dividers]
+cpu = 1
+
+[[device]]
+name = "vic"
+kind = "c64.vic"
+domain = "main"
+[device.params]
+fetch_bus = "cpu"
+pal = true
+[device.dividers]
+line = 63
+
+[[device]]
+name = "sid"
+kind = "c64.sid"
+domain = "main"
+[device.params]
+pal = true
+[device.dividers]
+cpu = 1
+
+[[device]]
+name = "cia1"
+kind = "c64.cia"
+domain = "main"
+[device.params]
+pal = true
+[device.dividers]
+cpu = 1
+
+[[device]]
+name = "cia2"
+kind = "c64.cia"
+domain = "main"
+[device.params]
+nmi = true
+pal = true
+[device.dividers]
+cpu = 1
+
+[quirks]
+"mos6502.undocumented" = true

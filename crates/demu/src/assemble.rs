@@ -109,6 +109,13 @@ pub fn demu_ctors() -> DeviceCtors {
     ctors.register("atari.cart2600", Box::new(new_atari_cart2600));
     ctors.register("atari.cart5200", Box::new(new_atari_cart5200));
     ctors.register("atari.cart7800", Box::new(new_atari_cart7800));
+    ctors.register("atari.pia", Box::new(new_atari_pia));
+    ctors.register("c64.vic", Box::new(new_c64_vic));
+    ctors.register("c64.sid", Box::new(new_c64_sid));
+    ctors.register("c64.cia", Box::new(new_c64_cia));
+    ctors.register("a2.video", Box::new(new_a2_video));
+    ctors.register("a2.io", Box::new(new_a2_io));
+    ctors.register("a2.disk2", Box::new(new_a2_disk2));
     ctors
 }
 
@@ -311,6 +318,55 @@ fn new_atari_rom(
         .map_err(|e| MachineError::Assembly(e.to_string()))?;
     rom.set_readonly(true);
     Ok(Box::new(rom))
+}
+
+fn new_atari_pia(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_io::Pia::new(device)))
+}
+
+fn new_c64_vic(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_video::Vic::new(device)))
+}
+
+fn new_c64_sid(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_audio::Sid::new(device)))
+}
+
+fn new_c64_cia(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_io::Cia::new(device)))
+}
+
+fn new_a2_video(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_video::AppleVideo::new(device)))
+}
+
+fn new_a2_io(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_io::AppleIo::new(device)))
+}
+
+fn new_a2_disk2(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_io::Disk2::new(device)))
 }
 
 fn new_atari_cart2600(

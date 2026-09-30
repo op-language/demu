@@ -1,0 +1,15 @@
+# Apple IIe (Enhanced): an alias of the Apple II base machine through the family
+# extend chain. This build encodes one shared memory plan and one
+# console block for all four members; the built-in differences of the
+# IIc and IIe generations record in the technical design.
+
+[system]
+name = "Apple IIe (Enhanced)"
+triple = "mos6502-apple-iie-enhanced"
+description = "The Apple IIe enhanced firmware over the IIe machine base."
+
+[extends]
+base = "mos6502-apple-ii"
+
+[quirks]
+"mos6502.undocumented" = true

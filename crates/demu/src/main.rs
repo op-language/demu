@@ -1217,3 +1217,318 @@ pub mod atari_machine_tests {
         assert_eq!(a, b);
     }
 }
+
+#[cfg(test)]
+pub mod computer_machine_tests {
+    use crate::assemble;
+    use demu_core::Tick;
+    use demu_core::machine::Machine;
+
+    /// Assemble one machine from a bundled triple.
+    fn machine_for(triple: &str) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        Machine::assemble(config, &assemble::demu_ctors()).expect("assemble")
+    }
+
+    /// Boot one machine with one synthetic image on the named device.
+    pub(super) fn booted_image(triple: &str, device: &str, bytes: Vec<u8>) -> Machine {
+        let mut machine = machine_for(triple);
+        machine
+            .override_boot(device, demu_config::model::BootState::Hex { bytes })
+            .expect("boot image");
+        machine.boot();
+        machine
+    }
+
+    pub(super) fn cpu_pc(machine: &Machine) -> u16 {
+        let regs = machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers();
+        u16::try_from(regs["PC"]).expect("pc fits")
+    }
+
+    /// The frames of the first device that reports a frame count.
+    pub(super) fn frames_of(machine: &Machine, device: &str) -> u64 {
+        machine
+            .device_by_name(device)
+            .and_then(|d| d.video())
+            .map(|v| v.frames())
+            .expect("frames")
+    }
+
+    /// The Atari 800 OS stub: the setup writes, one audio register and
+    /// one control write per chip, then a WSYNC loop.
+    pub(super) fn a800_os_image() -> Vec<u8> {
+        let mut rom = vec![0u8; 0x2000];
+        let code: &[u8] = &[
+            0x78, // SEI
+            0xA2, 0xFF, 0x9A, // LDX #$FF, TXS
+            0xD8, // CLD
+            0xA9, 0x3C, 0x8D, 0x02, 0xD3, // LDA #$3C, STA PACTL
+            0xA9, 0x00, 0x8D, 0x0E, 0xD2, // LDA #$00, STA IRQEN: no irq source
+            0xA9, 0xA8, 0x8D, 0x00, 0xD2, // LDA #$A8, STA AUDF1
+            0xA9, 0xA8, 0x8D, 0x01, 0xD2, // LDA #$A8, STA AUDC1
+            0xA9, 0x8A, 0x8D, 0x0C, 0xD2, // LDA #$8A, STA SKCTL
+        ];
+        rom[..code.len()].copy_from_slice(code);
+        // The loop at $E01E: STA WSYNC ($D40A), JMP back.
+        rom[0x001E..0x0024].copy_from_slice(&[0x8D, 0x0A, 0xD4, 0x4C, 0x1E, 0xE0]);
+        // The reset vector at $FFFC maps to the last bytes of the 8K
+        // window: image offset 0x1FFC.
+        rom[0x1FFC] = 0x00;
+        rom[0x1FFD] = 0xE0;
+        rom
+    }
+
+    #[test]
+    fn atari800_ntsc_boots_into_the_wsync_loop() {
+        let mut machine = booted_image("mos6502-atari-800-ntsc", "os", a800_os_image());
+        machine.run_until(Tick(2_000_000));
+        let pc = cpu_pc(&machine);
+        assert!(
+            (0xE01E..=0xE021).contains(&pc),
+            "the OS stub loops at the WSYNC, pc={pc:#06x}"
+        );
+        assert!(frames_of(&machine, "antic") >= 16);
+    }
+
+    #[test]
+    fn atari800_pal_boots_and_the_ntsc_machine_frames_lead() {
+        let mut pal = booted_image("mos6502-atari-800-pal", "os", a800_os_image());
+        pal.run_until(Tick(2_000_000));
+        let pc = cpu_pc(&pal);
+        assert!(
+            (0xE01E..=0xE021).contains(&pc),
+            "the OS stub loops at the WSYNC, pc={pc:#06x}"
+        );
+        let mut ntsc = booted_image("mos6502-atari-800-ntsc", "os", a800_os_image());
+        ntsc.run_until(Tick(2_000_000));
+        // The PAL frame runs 312 lines over the color-clock domain of
+        // 71_136 ticks; the NTSC frame runs 262 lines over 119_472
+        // ticks, so over one shared budget the PAL machine composes
+        // strictly more frames.
+        let ntsc_frames = frames_of(&ntsc, "antic");
+        let pal_frames = frames_of(&pal, "antic");
+        assert!(
+            pal_frames > ntsc_frames,
+            "ntsc={ntsc_frames} pal={pal_frames}"
+        );
+    }
+
+    /// The C64 RAM image: the boot code parks the IRQ compare and the
+    /// flag enable, counts raster IRQs into $0200, and loops.
+    pub(super) fn c64_ram_image() -> Vec<u8> {
+        let mut ram = vec![0u8; 0x10000];
+        let code: &[u8] = &[
+            0x78, // C000: SEI
+            0xA2, 0xFF, 0x9A, // LDX #$FF, TXS
+            0xD8, // CLD
+            0xA9, 0x32, 0x8D, 0x12, 0xD0, // LDA #$32, STA $D012 raster 50
+            0xA9, 0x01, 0x8D, 0x1A, 0xD0, // LDA #$01, STA $D01A
+            0x58, // CLI
+            0xAD, 0x00, 0x02, // C010: LDA $0200
+            0xC9, 0x0A, // CMP #$0A
+            0x90, 0xF9, // BCC back to C010
+            0xE6, 0x01, // INC $01 done flag
+            0x4C, 0x19, 0xC0, // JMP C019 park
+        ];
+        ram[0xC000..0xC000 + code.len()].copy_from_slice(code);
+        // C020: LDA $D019 ack, INC $0200 absolute, RTI
+        ram[0xC020..0xC027].copy_from_slice(&[0xAD, 0x19, 0xD0, 0xEE, 0x00, 0x02, 0x40]);
+        ram[0xFFFC] = 0x00;
+        ram[0xFFFD] = 0xC0;
+        ram[0xFFFE] = 0x20;
+        ram[0xFFFF] = 0xC0;
+        ram
+    }
+
+    #[test]
+    fn commodore64_counts_raster_irqs_from_ram_boot() {
+        let mut machine = booted_image("mos6502-commodore-64", "wram", c64_ram_image());
+        machine.run_until(Tick(4_000_000));
+        use demu_core::frequency::Address;
+        let count = machine.peek("cpu", Address(0x0200));
+        assert!(count >= 10, "raster irq count={count}");
+        let done = machine.peek("cpu", Address(0x0001));
+        assert_eq!(done, 0x01, "the counted loop finished");
+        let pc = cpu_pc(&machine);
+        assert!(
+            (0xC019..=0xC01B).contains(&pc),
+            "the park loop holds, pc={pc:#06x}"
+        );
+        // Two runs with one image compose identical frame counts.
+        let mut two = booted_image("mos6502-commodore-64", "wram", c64_ram_image());
+        two.run_until(Tick(4_000_000));
+        assert_eq!(frames_of(&machine, "vic"), frames_of(&two, "vic"));
+    }
+
+    #[test]
+    fn commodore64_saves_and_restores_mid_run() {
+        let mut machine = booted_image("mos6502-commodore-64", "wram", c64_ram_image());
+        machine.run_until(Tick(2_000_000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        let mut twin = machine_for("mos6502-commodore-64");
+        twin.override_boot(
+            "wram",
+            demu_config::model::BootState::Hex {
+                bytes: c64_ram_image(),
+            },
+        )
+        .expect("boot twin");
+        twin.boot();
+        twin.load(&buf).expect("restore");
+        twin.run_until(Tick(4_000_000));
+        machine.run_until(Tick(4_000_000));
+        use demu_core::frequency::Address;
+        assert_eq!(
+            machine.peek("cpu", Address(0x0200)),
+            twin.peek("cpu", Address(0x0200)),
+            "the restored twin counts the same"
+        );
+        assert_eq!(cpu_pc(&machine), cpu_pc(&twin));
+    }
+
+    /// The Apple II monitor stub: the keys write text page bytes, the
+    /// form switches flip pages, and the loop parks.
+    pub(super) fn a2_monitor_image() -> Vec<u8> {
+        let mut rom = vec![0u8; 0x1000];
+        let code: &[u8] = &[
+            0x78, // F000: SEI
+            0xA2, 0xFF, 0x9A, // LDX #$FF, TXS
+            0xD8, // CLD
+            0xA9, 0x41, 0x8D, 0x00, 0x04, // LDA #'A', STA $0400
+            0xA9, 0x42, 0x8D, 0x01, 0x04, // LDA #'B', STA $0401
+            0xA9, 0x43, 0x8D, 0x02, 0x04, // LDA #'C', STA $0402
+            0x8D, 0x51, 0xC0, // STA $C051 text mode
+        ];
+        rom[..code.len()].copy_from_slice(code);
+        let loop_at = 0x17;
+        rom[loop_at..loop_at + 3].copy_from_slice(&[0x4C, loop_at as u8, 0xF0]);
+        rom[0x0FFC] = 0x00;
+        rom[0x0FFD] = 0xF0;
+        rom
+    }
+
+    #[test]
+    fn apple_ii_boots_into_the_park_loop() {
+        let mut machine = booted_image("mos6502-apple-ii", "monitor", a2_monitor_image());
+        machine.run_until(Tick(2_000_000));
+        let pc = cpu_pc(&machine);
+        assert!(
+            (0xF017..=0xF019).contains(&pc),
+            "the monitor stub parks, pc={pc:#06x}"
+        );
+        assert!(frames_of(&machine, "video") >= 8);
+        use demu_core::device::VideoLayer;
+        let fb = machine
+            .device_by_name("video")
+            .and_then(|d| d.video())
+            .and_then(|v| v.dump_layer(VideoLayer::Framebuffer))
+            .expect("framebuffer");
+        assert!(fb.iter().any(|b| *b != 0), "the text page paints pixels");
+    }
+
+    #[test]
+    fn apple_disk2_answers_the_slot_window() {
+        let mut machine = booted_image("mos6502-apple-ii", "monitor", a2_monitor_image());
+        let mut disk = vec![0u8; 35 * 256];
+        disk[0] = 0xAA;
+        machine
+            .override_boot("disk2", demu_config::model::BootState::Hex { bytes: disk })
+            .expect("boot disk");
+        machine.boot();
+        machine.run_until(Tick(100_000));
+        use demu_core::frequency::Address;
+        // The controller latches a written byte for the next read; the
+        // peek answers without side effects.
+        machine.debug_write("cpu", Address(0xC0ED), 0x5A);
+        assert_eq!(machine.peek("cpu", Address(0xC0EC)), 0x5A, "the latch");
+        // The second drive keeps its own latch.
+        machine.debug_write("cpu", Address(0xC0EB), 0);
+        machine.debug_write("cpu", Address(0xC0ED), 0xA5);
+        assert_eq!(machine.peek("cpu", Address(0xC0EC)), 0xA5, "drive two");
+        machine.debug_write("cpu", Address(0xC0EA), 0);
+        assert_eq!(
+            machine.peek("cpu", Address(0xC0EC)),
+            0x5A,
+            "drive one again"
+        );
+        // A media read through the window picks up a latch from the
+        // image only through the read path; the peek stays stable.
+        assert_eq!(
+            machine.peek("cpu", Address(0xC0EC)),
+            0x5A,
+            "peek has no side effect"
+        );
+    }
+
+    #[test]
+    fn commodore64_pal_boots_with_the_slow_crystal() {
+        let mut machine = booted_image("mos6502-commodore-64-pal", "wram", c64_ram_image());
+        machine.run_until(Tick(4_000_000));
+        use demu_core::frequency::Address;
+        let count = machine.peek("cpu", Address(0x0200));
+        assert!(count >= 10, "raster irq count={count}");
+        // The PAL domain carries one tick per CPU cycle, so the
+        // budget equals about four seconds and the fifty-hertz VIC
+        // composes about two hundred frames.
+        let frames = frames_of(&machine, "vic");
+        assert!((203..=205).contains(&frames), "pal frames={frames}");
+    }
+
+    #[test]
+    fn apple_family_configs_all_boot() {
+        for triple in [
+            "mos6502-apple-ii",
+            "mos6502-apple-iic",
+            "mos6502-apple-iie",
+            "mos6502-apple-iie-enhanced",
+        ] {
+            let mut machine = booted_image(triple, "monitor", a2_monitor_image());
+            machine.run_until(Tick(1_000_000));
+            assert!(frames_of(&machine, "video") >= 4, "triple={triple}");
+            let pc = cpu_pc(&machine);
+            assert!(
+                (0xF017..=0xF019).contains(&pc),
+                "triple={triple} pc={pc:#06x}"
+            );
+        }
+    }
+
+    #[test]
+    fn apple_ii_saves_and_restores_mid_run() {
+        let mut machine = booted_image("mos6502-apple-ii", "monitor", a2_monitor_image());
+        machine.run_until(Tick(1_000_000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        let mut twin = machine_for("mos6502-apple-ii");
+        twin.override_boot(
+            "monitor",
+            demu_config::model::BootState::Hex {
+                bytes: a2_monitor_image(),
+            },
+        )
+        .expect("boot twin");
+        twin.boot();
+        twin.load(&buf).expect("restore");
+        twin.run_until(Tick(2_000_000));
+        machine.run_until(Tick(2_000_000));
+        assert_eq!(cpu_pc(&machine), cpu_pc(&twin));
+        use demu_core::device::VideoLayer;
+        let a = machine
+            .device_by_name("video")
+            .and_then(|d| d.video())
+            .and_then(|v| v.dump_layer(VideoLayer::Framebuffer))
+            .expect("framebuffer");
+        let b = twin
+            .device_by_name("video")
+            .and_then(|d| d.video())
+            .and_then(|v| v.dump_layer(VideoLayer::Framebuffer))
+            .expect("framebuffer");
+        assert_eq!(a, b, "the restored twin composes the same frame");
+    }
+}

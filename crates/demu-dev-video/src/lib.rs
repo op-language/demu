@@ -9,15 +9,19 @@
 //! palettes, and the object priority mode.
 
 pub mod antic;
+pub mod apple;
 pub mod maria;
 pub mod nes;
 pub mod tia;
+pub mod vic;
 
 pub use antic::Antic;
+pub use apple::AppleVideo;
 pub use maria::Maria;
 pub use nes::NesPpu;
 pub use tia::Tia;
 pub use tia::color_rgb as tia_color_rgb;
+pub use vic::Vic;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, Frame, MachineCtx, VideoLayer, VideoSource};

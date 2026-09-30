@@ -60,6 +60,8 @@ pub struct Antic {
     fetch_bus: String,
     /// Master ticks per color clock.
     dot_div: u64,
+    /// Raster lines per frame: 262 NTSC, 312 PAL.
+    lines: u32,
 
     // The ANTIC register file.
     dmactl: u8,
@@ -128,10 +130,16 @@ impl Antic {
             .and_then(|v| v.as_str())
             .map(String::from)
             .unwrap_or_else(|| "cpu".to_string());
+        let pal = device
+            .params
+            .get("pal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         Self {
             name: device.name.to_string(),
             fetch_bus,
             dot_div: u64::from(device.dividers.get("dot").copied().unwrap_or(2)).max(1),
+            lines: if pal { 312 } else { LINES },
             dmactl: 0,
             chactl: 0,
             dlist: 0,
@@ -702,7 +710,8 @@ impl Device for Antic {
         pos += 16;
         self.cc = u32::from_le_bytes(data[pos..pos + 4].try_into().expect("4 bytes")) % LINE_CLOCKS;
         pos += 4;
-        self.line = u32::from_le_bytes(data[pos..pos + 4].try_into().expect("4 bytes")) % LINES;
+        self.line =
+            u32::from_le_bytes(data[pos..pos + 4].try_into().expect("4 bytes")) % self.lines;
         pos += 4;
         self.mem_scan = u16::from_le_bytes(data[pos..pos + 2].try_into().expect("2 bytes"));
         pos += 2;
@@ -744,7 +753,7 @@ impl Device for Antic {
         self.cc += 1;
         if self.cc >= LINE_CLOCKS {
             self.cc %= LINE_CLOCKS;
-            self.line = (self.line + 1) % LINES;
+            self.line = (self.line + 1) % self.lines;
             // The WSYNC hold releases at the next line's blank start.
             ctx.notify("halt", Level::Low, tick);
             self.vcount_latch = (self.line / 2) as u8;
@@ -752,7 +761,7 @@ impl Device for Antic {
                 self.dl_step(tick, ctx);
             }
             self.render_line();
-            if self.line == LINES - 1 {
+            if self.line == self.lines - 1 {
                 self.frames += 1;
                 self.cached_frame.pixels = self.screen.clone();
                 ctx.emit(TriggerEvent::Vblank);
@@ -764,7 +773,7 @@ impl Device for Antic {
             }
             // The display-list interrupt lands on the last line of a
             // flagged mode line; the vertical blank on the frame end.
-            if self.line == LINES - 1 && self.nmien & 0x40 != 0 {
+            if self.line == self.lines - 1 && self.nmien & 0x40 != 0 {
                 self.nmist |= 0x40;
                 self.nmi_pending = true;
             } else if self.dl_mode.is_some_and(|m| m & 0x80 != 0)
@@ -817,6 +826,7 @@ mod tests {
             name: "antic".to_string(),
             fetch_bus: "cpu".to_string(),
             dot_div: 2,
+            lines: 262,
             dmactl: 0,
             chactl: 0,
             dlist: 0,

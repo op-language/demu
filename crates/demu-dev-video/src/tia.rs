@@ -402,10 +402,14 @@ impl Tia {
     /// reverse order, PF1 the bits in direct order, and PF2 in reverse
     /// order. The reflect mode mirrors the right half of the screen.
     fn pf_bit(&self, x: u32) -> bool {
-        let px = if self.ctrlpf & 0x01 != 0 && x >= PX / 2 {
-            PX - 1 - x
+        // The left half holds the whole 20-cell pattern; the right
+        // half repeats it, mirrored when the reflect bit is set.
+        let half = PX / 2;
+        let base = x % half;
+        let px = if self.ctrlpf & 0x01 != 0 && x >= half {
+            half - 1 - base
         } else {
-            x
+            base
         };
         let cell = px / 4;
         match cell {

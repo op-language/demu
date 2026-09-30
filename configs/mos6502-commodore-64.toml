@@ -1,0 +1,171 @@
+# Commodore 64, NTSC: the 6510-class CPU at one seventh of the pixel
+# crystal with the VIC-II, the SID, and the two CIAs.
+#
+# One clock domain at the pixel rate, 315000000/44 Hz = 7.159090 MHz,
+# so one video dot is one tick. The CPU cycle is seven ticks
+# (1.022727 MHz); a raster line is 65 CPU cycles = 455 ticks (the VIC
+# line divider) and the frame carries 263 lines. CIA2's TOD divider
+# stays the device default of the CPU-cycle form, 17045 ticks per
+# pulse of the sixty-pulse form.
+#
+# The PLA banking of $01 stays store-only: the config maps the RAM,
+# the character RAM, and the I/O windows statically, and the build
+# carries no BASIC or KERNAL ROM assets, so the upper 4K space is RAM
+# for synthetic boot programs. The character window $D800-$DBFF is the
+# VIC color RAM of 1024 nibbles.
+
+[system]
+name = "Commodore 64"
+triple = "mos6502-commodore-64"
+description = "The NTSC Commodore 64 with the VIC-II, SID, and two CIAs."
+
+[clock.main]
+frequency = "315000000/44"
+origin = "NTSC pixel crystal; one CPU cycle is 14 master ticks"
+
+[[device]]
+name = "cpu0"
+kind = "mos6502.cpu"
+domain = "main"
+[device.dividers]
+cpu = 7
+
+[[device]]
+name = "vic"
+kind = "c64.vic"
+domain = "main"
+[device.params]
+fetch_bus = "cpu"
+[device.dividers]
+line = 455
+
+[[device]]
+name = "sid"
+kind = "c64.sid"
+domain = "main"
+[device.dividers]
+cpu = 7
+
+[[device]]
+name = "cia1"
+kind = "c64.cia"
+domain = "main"
+[device.dividers]
+cpu = 7
+tod_div = 17045
+
+[[device]]
+name = "cia2"
+kind = "c64.cia"
+domain = "main"
+[device.params]
+nmi = true
+[device.dividers]
+cpu = 7
+tod_div = 17045
+
+[[device]]
+name = "wram"
+kind = "atari.ram"
+domain = "main"
+[device.params]
+size = 0x10000
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+# The RAM in four segments that gap the hardware page and the
+# character ROM window.
+[[window]]
+name = "w_ram0"
+bus = "cpu"
+device = "wram"
+base = "0x0000"
+size = "0xD000"
+
+[[window]]
+name = "w_ram1"
+bus = "cpu"
+device = "wram"
+base = "0xD500"
+size = "0x0300"
+
+[[window]]
+name = "w_ram2"
+bus = "cpu"
+device = "wram"
+base = "0xDE00"
+size = "0x0200"
+
+[[window]]
+name = "w_ram3"
+bus = "cpu"
+device = "wram"
+base = "0xE000"
+size = "0x2000"
+
+
+[[window]]
+name = "w_vic"
+bus = "cpu"
+device = "vic"
+base = "0xD000"
+size = "0x0040"
+mirror_stride = "0x0040"
+mirror_count = 15
+
+[[window]]
+name = "w_vic_color"
+bus = "cpu"
+device = "vic"
+base = "0xD800"
+size = "0x0400"
+
+[[window]]
+name = "w_sid"
+bus = "cpu"
+device = "sid"
+base = "0xD400"
+size = "0x0020"
+mirror_stride = "0x0020"
+mirror_count = 7
+
+[[window]]
+name = "w_cia1"
+bus = "cpu"
+device = "cia1"
+base = "0xDC00"
+size = "0x0010"
+mirror_stride = "0x0010"
+mirror_count = 15
+
+[[window]]
+name = "w_cia2"
+bus = "cpu"
+device = "cia2"
+base = "0xDD00"
+size = "0x0010"
+mirror_stride = "0x0010"
+mirror_count = 15
+
+# The VIC raises the raster IRQ; CIA1 presses the IRQ line; CIA2
+# presses the NMI line.
+[[connection]]
+from = "vic.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+[[connection]]
+from = "cia1.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+[[connection]]
+from = "cia2.nmi"
+to = "cpu0.nmi"
+semantics = "irq"
+
+[quirks]
+"mos6502.undocumented" = true

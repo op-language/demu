@@ -39,6 +39,31 @@ pub const ATARI_5200: &str = include_str!("../../../configs/mos6502-atari-5200.t
 /// The Atari 7800.
 pub const ATARI_7800: &str = include_str!("../../../configs/mos6502-atari-7800.toml");
 
+/// The Atari 800, NTSC.
+pub const ATARI_800_NTSC: &str = include_str!("../../../configs/mos6502-atari-800-ntsc.toml");
+
+/// The Atari 800, PAL.
+pub const ATARI_800_PAL: &str = include_str!("../../../configs/mos6502-atari-800-pal.toml");
+
+/// The Commodore 64, NTSC.
+pub const COMMODORE_64: &str = include_str!("../../../configs/mos6502-commodore-64.toml");
+
+/// The Commodore 64, PAL.
+pub const COMMODORE_64_PAL: &str = include_str!("../../../configs/mos6502-commodore-64-pal.toml");
+
+/// The Apple II.
+pub const APPLE_II: &str = include_str!("../../../configs/mos6502-apple-ii.toml");
+
+/// The Apple IIc.
+pub const APPLE_IIC: &str = include_str!("../../../configs/mos6502-apple-iic.toml");
+
+/// The Apple IIe.
+pub const APPLE_IIE: &str = include_str!("../../../configs/mos6502-apple-iie.toml");
+
+/// The Apple IIe, enhanced.
+pub const APPLE_IIE_ENHANCED: &str =
+    include_str!("../../../configs/mos6502-apple-iie-enhanced.toml");
+
 /// A bundled config source: the triple name and the embedded text.
 pub struct BundledConfig {
     /// The triple name that selects this config.
@@ -88,6 +113,38 @@ pub const BUNDLED: &[BundledConfig] = &[
     BundledConfig {
         triple: "mos6502-atari-7800",
         text: ATARI_7800,
+    },
+    BundledConfig {
+        triple: "mos6502-atari-800-ntsc",
+        text: ATARI_800_NTSC,
+    },
+    BundledConfig {
+        triple: "mos6502-atari-800-pal",
+        text: ATARI_800_PAL,
+    },
+    BundledConfig {
+        triple: "mos6502-commodore-64",
+        text: COMMODORE_64,
+    },
+    BundledConfig {
+        triple: "mos6502-commodore-64-pal",
+        text: COMMODORE_64_PAL,
+    },
+    BundledConfig {
+        triple: "mos6502-apple-ii",
+        text: APPLE_II,
+    },
+    BundledConfig {
+        triple: "mos6502-apple-iic",
+        text: APPLE_IIC,
+    },
+    BundledConfig {
+        triple: "mos6502-apple-iie",
+        text: APPLE_IIE,
+    },
+    BundledConfig {
+        triple: "mos6502-apple-iie-enhanced",
+        text: APPLE_IIE_ENHANCED,
     },
 ];
 

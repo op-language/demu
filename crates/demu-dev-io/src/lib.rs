@@ -10,10 +10,18 @@
 //! delivered edges reach the CPU and the audio device over the declared
 //! connections.
 
+pub mod apple;
+pub mod cia;
+pub mod disk2;
 pub mod nes;
+pub mod pia;
 pub mod riot;
 
+pub use apple::AppleIo;
+pub use cia::Cia;
+pub use disk2::Disk2;
 pub use nes::Controller;
+pub use pia::Pia;
 pub use riot::Riot;
 
 use demu_config::model::BootState;

@@ -1,0 +1,145 @@
+# Atari 800, NTSC: the 6502 at one quarter of the master crystal with
+# ANTIC, GTIA, POKEY, and the PIA on the I/O page.
+#
+# One clock domain at the master crystal, 315000000/44 Hz. The CPU
+# cycle is four ticks; ANTIC and GTIA walk one color clock per visit
+# (two master ticks); POKEY and the PIA run their timers on CPU
+# cycles. The OS ROM of 8 KiB answers $E000-$FFFF and reads at boot.
+
+[system]
+name = "Atari 800 (NTSC)"
+triple = "mos6502-atari-800-ntsc"
+description = "The NTSC Atari 800 home computer with ANTIC, GTIA, POKEY, and PIA."
+
+[clock.main]
+frequency = "315000000/44"
+origin = "NTSC master crystal; the CPU cycle is 4 ticks and the color clock 2"
+
+[[device]]
+name = "cpu0"
+kind = "mos6502.cpu"
+domain = "main"
+[device.dividers]
+cpu = 4
+
+[[device]]
+name = "antic"
+kind = "atari.antic"
+domain = "main"
+[device.params]
+fetch_bus = "cpu"
+[device.dividers]
+dot = 2
+
+[[device]]
+name = "pokey"
+kind = "atari.pokey"
+domain = "main"
+[device.dividers]
+cpu = 4
+
+[[device]]
+name = "pia"
+kind = "atari.pia"
+domain = "main"
+[device.dividers]
+cpu = 4
+
+[[device]]
+name = "wram"
+kind = "atari.ram"
+domain = "main"
+[device.params]
+size = 0xC000
+
+[[device]]
+name = "os"
+kind = "atari.rom"
+domain = "main"
+[device.params]
+size = 0x2000
+readonly = true
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[window]]
+name = "w_ram"
+bus = "cpu"
+device = "wram"
+base = "0x0000"
+size = "0xC000"
+
+[[window]]
+name = "w_gtia"
+bus = "cpu"
+device = "antic"
+base = "0xD000"
+size = "0x0020"
+mirror_stride = "0x0020"
+mirror_count = 7
+
+[[window]]
+name = "w_pokey"
+bus = "cpu"
+device = "pokey"
+base = "0xD200"
+size = "0x0010"
+mirror_stride = "0x0010"
+mirror_count = 15
+
+[[window]]
+name = "w_pia"
+bus = "cpu"
+device = "pia"
+base = "0xD300"
+size = "0x0004"
+mirror_stride = "0x0010"
+mirror_count = 15
+
+[[window]]
+name = "w_antic"
+bus = "cpu"
+device = "antic"
+base = "0xD400"
+size = "0x0010"
+mirror_stride = "0x0010"
+mirror_count = 1
+
+[[window]]
+name = "w_os"
+bus = "cpu"
+device = "os"
+base = "0xE000"
+size = "0x2000"
+
+# ANTIC raises the NMI for display-list and vertical-blank events; the
+# POKEY and the PIA press the wired-OR IRQ line.
+[[connection]]
+from = "antic.nmi"
+to = "cpu0.nmi"
+semantics = "display-sync"
+
+[[connection]]
+from = "antic.halt"
+to = "cpu0.halt"
+semantics = "dma-request"
+
+[[connection]]
+from = "pokey.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+[[connection]]
+from = "pia.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+# The OS image file reads when the machine boots.
+[boot.os]
+rom = "atari800-os.rom"
+
+[quirks]
+"mos6502.undocumented" = true

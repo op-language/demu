@@ -1,0 +1,163 @@
+# The Apple II, one of the four Apple II machine configs of the 6502
+# family. The video clock is the NTSC crystal at one half step,
+# 315000000/44 Hz = 7.159090 MHz, and the CPU runs at one seventh of
+# it: 1.022727 MHz, seven video dots per CPU cycle.
+#
+# The video device owns the display pages and answers the form
+# switches; the console device answers the rest of the I/O page and
+# the language-card block, whose banks answer only after a card
+# select switch. The monitor ROM answers $F000-$FFFF and reads when
+# the machine boots.
+
+[system]
+name = "Apple II"
+triple = "mos6502-apple-ii"
+description = "The original Apple II with the video generator, console, and language card."
+
+[clock.main]
+frequency = "315000000/44"
+origin = "NTSC video clock; one CPU cycle is 7 dots"
+
+[[device]]
+name = "cpu0"
+kind = "mos6502.cpu"
+domain = "main"
+[device.dividers]
+cpu = 7
+
+[[device]]
+name = "video"
+kind = "a2.video"
+domain = "main"
+[device.dividers]
+dot = 1
+
+[[device]]
+name = "console"
+kind = "a2.io"
+domain = "main"
+[device.dividers]
+cpu = 7
+
+[[device]]
+name = "wram"
+kind = "atari.ram"
+domain = "main"
+[device.params]
+size = 0xC000
+
+[[device]]
+name = "disk2"
+kind = "a2.disk2"
+domain = "main"
+[device.dividers]
+cpu = 7
+
+[[device]]
+name = "monitor"
+kind = "atari.rom"
+domain = "main"
+[device.params]
+size = 0x1000
+readonly = true
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+# The main RAM in windows that leave the display pages and the I/O
+# page to their owners.
+[[window]]
+name = "w_ram0"
+bus = "cpu"
+device = "wram"
+base = "0x0000"
+size = "0x0400"
+
+[[window]]
+name = "w_text"
+bus = "cpu"
+device = "video"
+base = "0x0400"
+size = "0x0800"
+
+[[window]]
+name = "w_ram1"
+bus = "cpu"
+device = "wram"
+base = "0x0C00"
+size = "0x1400"
+
+[[window]]
+name = "w_hires"
+bus = "cpu"
+device = "video"
+base = "0x2000"
+size = "0x4000"
+
+[[window]]
+name = "w_ram2"
+bus = "cpu"
+device = "wram"
+base = "0x6000"
+size = "0x6000"
+
+[[window]]
+name = "w_console"
+bus = "cpu"
+device = "console"
+base = "0xC000"
+size = "0x0100"
+overlay = "video-forms"
+
+[[window]]
+name = "w_video_forms"
+bus = "cpu"
+device = "video"
+base = "0xC050"
+size = "0x0008"
+overlay = "video-forms"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+# The Disk II controller of the classic slot-6 window overlays the
+# console page: the phase, motor, select, and data registers answer
+# there, and the boot carries one raw disk image for drive one.
+[[window]]
+name = "w_disk2"
+bus = "cpu"
+device = "disk2"
+base = "0xC0E0"
+size = "0x0010"
+overlay = "console"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+# The language card answers only when a bank switch makes it visible;
+# while invisible the console device answers the open-bus readback.
+[[window]]
+name = "w_langcard"
+bus = "cpu"
+device = "console"
+base = "0xD000"
+size = "0x2000"
+
+[[window]]
+name = "w_monitor"
+bus = "cpu"
+device = "monitor"
+base = "0xF000"
+size = "0x1000"
+
+# The monitor and disk images read when the machine boots; the disk
+# stays optional and boots an empty controller when the file is
+# absent.
+[boot.monitor]
+rom = "apple-monitor.rom"
+
+[boot.disk2]
+rom = "apple-disk2.rom"
+
+[quirks]
+"mos6502.undocumented" = true

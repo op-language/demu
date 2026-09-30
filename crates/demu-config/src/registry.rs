@@ -193,6 +193,15 @@ pub fn core_registry() -> &'static KindRegistry {
         // The Atari machine family: the 2600 and the video slice and
         // sound chips of the 5200 and the 7800. The CPU kinds reuse
         // the plain 6502 kind with divider overrides from the config.
+        r.register(KindInfo::new("atari.pia", DomainRequirement::Required, &[]));
+        // The Commodore 64 of the 6502 family.
+        r.register(KindInfo::new("c64.vic", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("c64.sid", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("c64.cia", DomainRequirement::Required, &[]));
+        // The Apple II family.
+        r.register(KindInfo::new("a2.video", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("a2.io", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("a2.disk2", DomainRequirement::Required, &[]));
         for kind in [
             "atari.tia",
             "atari.riot",
