@@ -35,6 +35,14 @@ version = "0.1.0"
 dependencies = [
  "demu-config",
  "demu-core",
+ "demu-cpu-sm83",
+ "demu-dev-audio",
+ "demu-dev-cartridge",
+ "demu-dev-dma",
+ "demu-dev-io",
+ "demu-dev-memory",
+ "demu-dev-serial",
+ "demu-dev-video",
  "demu-shell",
  "demu-symbols",
  "png",
@@ -78,6 +86,11 @@ version = "0.1.0"
 [[package]]
 name = "demu-cpu-sm83"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-cpu-wdc65c816"
@@ -90,30 +103,65 @@ version = "0.1.0"
 [[package]]
 name = "demu-dev-audio"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-dev-cartridge"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-dev-dma"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-dev-io"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-dev-memory"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-dev-serial"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-dev-video"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-mkv"
@@ -130,6 +178,7 @@ dependencies = [
  "demu-config",
  "demu-core",
  "demu-symbols",
+ "png",
  "rustc-hash",
  "serde",
  "serde_json",

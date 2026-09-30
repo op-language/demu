@@ -120,8 +120,8 @@ pub enum TriggerEvent {
     Read(Address),
     /// A memory write at an address.
     Write(Address),
-    /// An instruction fetch completed.
-    Fetch,
+    /// An instruction fetch completed at an address.
+    Fetch(Address),
     /// A DMA event.
     Dma(DmaPhase),
     /// A vblank.
@@ -223,12 +223,13 @@ impl TriggerRegistry {
         let mut fired = Vec::new();
         for t in &mut self.triggers {
             let matches = match (&t.kind, event) {
-                (TriggerKind::ReadWatch { address: watch }, TriggerEvent::Read(a)) => a == watch,
-                (TriggerKind::WriteWatch { address: watch }, TriggerEvent::Write(a)) => a == watch,
+                (TriggerKind::Breakpoint { address: watch }, TriggerEvent::Fetch(a)) => watch == a,
+                (TriggerKind::ReadWatch { address: watch }, TriggerEvent::Read(a)) => watch == a,
+                (TriggerKind::WriteWatch { address: watch }, TriggerEvent::Write(a)) => watch == a,
                 (TriggerKind::IoRead { port }, TriggerEvent::Read(a)) => a == port,
                 (TriggerKind::IoWrite { port }, TriggerEvent::Write(a)) => a == port,
                 (TriggerKind::Irq, TriggerEvent::Irq) => true,
-                (TriggerKind::Fetch, TriggerEvent::Fetch) => true,
+                (TriggerKind::Fetch, TriggerEvent::Fetch(_)) => true,
                 (TriggerKind::Dma { phase: want }, TriggerEvent::Dma(got)) => want == got,
                 (TriggerKind::Vblank, TriggerEvent::Vblank) => true,
                 (TriggerKind::Scanline { number: want }, TriggerEvent::Scanline(got)) => {
@@ -288,9 +289,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            r.fire(&TriggerKind::Fetch),
-            Vec::<u64>::new(),
-            "a fetch event does not fire a breakpoint"
+            r.fire_event(&TriggerEvent::Fetch(Address(0x100))),
+            vec![id],
+            "a fetch event at the breakpoint address fires it"
         );
         assert_eq!(
             r.fire(&TriggerKind::Breakpoint {

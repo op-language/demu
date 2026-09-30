@@ -12,6 +12,12 @@ use crate::raw::RawConfig;
 /// The smoke machine: a trivial synthetic system for framework tests.
 pub const SMOKE: &str = include_str!("../../../configs/smoke.toml");
 
+/// The monochrome Game Boy.
+pub const GAMEBOY: &str = include_str!("../../../configs/sm83-nintendo-gameboy.toml");
+
+/// The Game Boy Color.
+pub const GAMEBOY_COLOR: &str = include_str!("../../../configs/sm83-nintendo-gameboy-color.toml");
+
 /// A bundled config source: the triple name and the embedded text.
 pub struct BundledConfig {
     /// The triple name that selects this config.
@@ -20,11 +26,21 @@ pub struct BundledConfig {
     pub text: &'static str,
 }
 
-/// All bundled canonical configs. The list grows as system phases land.
-pub const BUNDLED: &[BundledConfig] = &[BundledConfig {
-    triple: "smoke",
-    text: SMOKE,
-}];
+/// All bundled canonical configs. New system support extends the list.
+pub const BUNDLED: &[BundledConfig] = &[
+    BundledConfig {
+        triple: "smoke",
+        text: SMOKE,
+    },
+    BundledConfig {
+        triple: "sm83-nintendo-gameboy",
+        text: GAMEBOY,
+    },
+    BundledConfig {
+        triple: "sm83-nintendo-gameboy-color",
+        text: GAMEBOY_COLOR,
+    },
+];
 
 /// Resolve a `--config` argument: a bundled triple name or a file path.
 pub fn resolve_source(selector: &str) -> Result<RawConfig, ConfigError> {

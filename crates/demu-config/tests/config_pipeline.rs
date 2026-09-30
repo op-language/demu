@@ -353,7 +353,7 @@ fn lint_layer_reports_unused_clock() {
     );
 }
 
-/// Serialize a resolved config is out of scope for this phase; the helper
+/// Serializing a resolved config is out of scope here; the helper
 /// below only confirms that the resolved graph is self-consistent.
 #[test]
 fn resolved_graph_is_consistent() {

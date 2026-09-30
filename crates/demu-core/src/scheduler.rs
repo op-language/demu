@@ -18,6 +18,8 @@ pub struct Event {
     pub device: usize,
     /// A stable sequence number for deterministic tie-breaking.
     pub seq: u64,
+    /// The device's current generation; a stale event is discarded.
+    pub generation: u32,
 }
 
 impl Ord for Event {
@@ -46,6 +48,9 @@ pub struct ClockDomain {
     pub queue: std::collections::BinaryHeap<Event>,
     /// The next sequence number for tie-breaking.
     next_seq: u64,
+    /// The event generation per device slot; scheduling bumps it, and a
+    /// stale event in the heap is discarded on pop.
+    pub gens: Vec<u32>,
 }
 
 impl ClockDomain {
@@ -57,16 +62,25 @@ impl ClockDomain {
             now: Tick(0),
             queue: std::collections::BinaryHeap::new(),
             next_seq: 0,
+            gens: Vec::new(),
         }
     }
 
     /// Schedule a device visit at an absolute domain tick.
+    ///
+    /// Each call bumps the device's generation, so an earlier event for
+    /// the same device in the heap becomes stale and is discarded.
     pub fn schedule(&mut self, device: usize, at: Tick) {
         self.next_seq += 1;
+        while self.gens.len() <= device {
+            self.gens.push(0);
+        }
+        self.gens[device] = self.gens[device].wrapping_add(1);
         self.queue.push(Event {
             tick: at,
             device,
             seq: self.next_seq,
+            generation: self.gens[device],
         });
     }
 
@@ -77,19 +91,37 @@ impl ClockDomain {
     }
 
     /// The next event time, if any.
+    ///
+    /// Stale events do not count; the smallest live tick wins.
     pub fn next_time(&self) -> Option<Tick> {
-        self.queue.peek().map(|e| e.tick)
+        self.queue
+            .iter()
+            .filter(|e| self.gens.get(e.device).is_some_and(|g| *g == e.generation))
+            .map(|e| e.tick)
+            .min()
     }
 
     /// Pop the next event whose tick is due at or before `now`.
     ///
-    /// Returns `None` when the queue is empty or the next event is in the
-    /// future.
+    /// Stale events (a generation that does not match the device's
+    /// current generation) are discarded and the next one is returned.
+    /// Returns `None` when the queue is empty or the next event is in
+    /// the future.
     pub fn pop_due(&mut self) -> Option<Event> {
-        match self.queue.peek() {
-            Some(e) if e.tick <= self.now => Some(self.queue.pop().expect("peeked")),
-            _ => None,
+        while let Some(top) = self.queue.peek() {
+            if top.tick > self.now {
+                return None;
+            }
+            let event = self.queue.pop().expect("peeked");
+            if self
+                .gens
+                .get(event.device)
+                .is_some_and(|g| *g == event.generation)
+            {
+                return Some(event);
+            }
         }
+        None
     }
 
     /// Advance the domain counter to `at`.

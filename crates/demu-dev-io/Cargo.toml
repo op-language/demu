@@ -5,3 +5,8 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Joypads, keyboard matrices, and I/O controllers."
+
+[dependencies]
+demu-config = { version = "0.1.0", path = "../demu-config" }
+demu-core = { version = "0.1.0", path = "../demu-core" }
+thiserror = "2.0.20"

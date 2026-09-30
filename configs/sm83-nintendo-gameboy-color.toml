@@ -1,0 +1,402 @@
+# Nintendo Game Boy Color (CGB), the canonical system configuration.
+#
+# One clock domain at the 4194304 Hz crystal. The CGB double-speed mode
+# halves the domain dots per CPU T-cycle; the switch runs on STOP over
+# the declared speed connection. The machine boots through the 2304-byte
+# boot ROM, used under the SameBoy MIT license; the $FF50 writes unmap
+# it at the end of boot.
+
+[system]
+name = "Nintendo Game Boy Color"
+triple = "sm83-nintendo-gameboy-color"
+description = "The dual-speed Game Boy Color with the CGB boot ROM."
+
+[clock.main]
+frequency = "4194304"
+origin = "CGB crystal; dots stay fixed across the speed switch"
+
+[[device]]
+name = "cpu0"
+kind = "sm83.cpu"
+domain = "main"
+[device.dividers]
+cpu = 1
+
+[[device]]
+name = "bootrom"
+kind = "sm83.bootrom"
+domain = "main"
+[device.params]
+cgb = true
+
+[[device]]
+name = "cart"
+kind = "sm83.cart"
+domain = "main"
+
+[[device]]
+name = "wram"
+kind = "sm83.wram"
+domain = "main"
+[device.params]
+cgb = true
+
+[[device]]
+name = "hram"
+kind = "sm83.hram"
+domain = "main"
+
+[[device]]
+name = "ppu"
+kind = "sm83.ppu"
+domain = "main"
+[device.params]
+cgb = true
+
+[[device]]
+name = "apu"
+kind = "sm83.apu"
+domain = "main"
+[device.params]
+cgb = true
+
+[[device]]
+name = "dma"
+kind = "sm83.dma"
+domain = "main"
+
+[[device]]
+name = "hdma"
+kind = "sm83.hdma"
+domain = "main"
+
+[[device]]
+name = "timer"
+kind = "sm83.timer"
+domain = "main"
+
+[[device]]
+name = "joypad"
+kind = "sm83.joypad"
+domain = "main"
+
+[[device]]
+name = "serial"
+kind = "sm83.serial"
+domain = "main"
+
+[[device]]
+name = "io"
+kind = "sm83.io"
+domain = "main"
+[device.params]
+cgb = true
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[window]]
+name = "w_bootrom"
+bus = "cpu"
+device = "bootrom"
+base = "0x0000"
+size = "0x0100"
+overlay = "boot"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_bootrom_upper"
+bus = "cpu"
+device = "bootrom"
+base = "0x0200"
+size = "0x0800"
+overlay = "boot_upper"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_cart_rom0"
+bus = "cpu"
+device = "cart"
+base = "0x0000"
+size = "0x4000"
+overlay = "boot"
+
+[[window]]
+name = "w_cart_romn"
+bus = "cpu"
+device = "cart"
+base = "0x4000"
+size = "0x4000"
+overlay = "boot"
+
+[[window]]
+name = "w_ppu_vram"
+bus = "cpu"
+device = "ppu"
+base = "0x8000"
+size = "0x2000"
+
+[[window]]
+name = "w_cart_sram"
+bus = "cpu"
+device = "cart"
+base = "0xA000"
+size = "0x2000"
+
+[[window]]
+name = "w_wram"
+bus = "cpu"
+device = "wram"
+base = "0xC000"
+size = "0x2000"
+
+[[window]]
+name = "w_wram_echo"
+bus = "cpu"
+device = "wram"
+base = "0xE000"
+size = "0x1E00"
+
+[[window]]
+name = "w_io"
+bus = "cpu"
+device = "io"
+base = "0xFF00"
+size = "0x80"
+
+[[window]]
+name = "w_joypad"
+bus = "cpu"
+device = "joypad"
+base = "0xFF00"
+size = "0x01"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_serial"
+bus = "cpu"
+device = "serial"
+base = "0xFF01"
+size = "0x02"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_timer"
+bus = "cpu"
+device = "timer"
+base = "0xFF04"
+size = "0x04"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_apu"
+bus = "cpu"
+device = "apu"
+base = "0xFF10"
+size = "0x20"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_ppu_regs"
+bus = "cpu"
+device = "ppu"
+base = "0xFF40"
+size = "0x0C"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_dma"
+bus = "cpu"
+device = "dma"
+base = "0xFF46"
+size = "0x01"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_speed"
+bus = "cpu"
+device = "io"
+base = "0xFF4D"
+size = "0x01"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_hdma"
+bus = "cpu"
+device = "hdma"
+base = "0xFF51"
+size = "0x05"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_ppu_pal"
+bus = "cpu"
+device = "ppu"
+base = "0xFF68"
+size = "0x05"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_swbk"
+bus = "cpu"
+device = "wram"
+base = "0xFF70"
+size = "0x01"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_hram"
+bus = "cpu"
+device = "hram"
+base = "0xFF80"
+size = "0x7F"
+
+[[window]]
+name = "w_bootrom_bank"
+bus = "cpu"
+device = "bootrom"
+base = "0xFF50"
+size = "0x01"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[connection]]
+from = "ppu.vblank"
+to = "cpu0.vblank"
+semantics = "irq"
+
+[[connection]]
+from = "ppu.stat"
+to = "cpu0.stat"
+semantics = "irq"
+
+[[connection]]
+from = "timer.int"
+to = "cpu0.timer"
+semantics = "irq"
+
+[[connection]]
+from = "joypad.int"
+to = "cpu0.joypad"
+semantics = "irq"
+
+[[connection]]
+from = "serial.int"
+to = "cpu0.serial"
+semantics = "irq"
+
+[[connection]]
+from = "timer.div_apu"
+to = "apu.div_apu"
+semantics = "display-sync"
+
+[[connection]]
+from = "ppu.hblank"
+to = "hdma.hblank"
+semantics = "display-sync"
+
+[[connection]]
+from = "cpu0.speed"
+to = "io.speed"
+semantics = "irq"
+
+[[connection]]
+from = "cpu0.speed"
+to = "timer.speed"
+semantics = "irq"
+
+[[connection]]
+from = "cpu0.speed"
+to = "dma.speed"
+semantics = "irq"
+
+[[connection]]
+from = "io.key0"
+to = "ppu.key0"
+semantics = "irq"
+
+[boot.bootrom]
+hex = """
+    31FEFFCD260626FE0EA0220D20FC0E102130FF222F0D20FBE0C1E0803E80E026E0113EF3E012E0253E77E0243EFCE047
+    1104012110801A47CDF105137BFE3420F5CDAE063E01E04FCD2606CD5306060321C29816033E080E10CD8600F5D620D6
+    033006C620CD86000DF1820D20EBD62CD511100019D10520DE152817153E382EA701070118D3F53E01E04F3608AFE04F
+    F122C911E1050E082181FFAF2F22221A1CF620471A1DF6841FCB18702C22AF22221A1C221A1C22AF0D20E1CD1A083E91
+    E040CDBB063E30E0C20604CD15063E83CD1F060605CD15063EC1CD1F06CD4108CD090621C2FF3520F4CDE4061810D000
+    98A012D000800040000000000000E0500000000000000000000000000000000000000000000000000000000000000000
+    000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+    000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+    000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+    000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+    000000000000000000000000000000000000000000000000000000000000000000881636D1DBF23C8C923D5C58C93E70
+    1D59691935A814AA759599346F15FF974B90171039F7F6A2494E4368E08BF0CE0C29E8B7869A52019D719CBD5D6D673F
+    6BB34628A5C6D3276118666ABF0DF4B34628A5C6D3276118666ABF0DF4B30004052322031F0F0A05132487251E2C1520
+    1F1405210D0E051D05120903021A1919292A1A2D2A2D24269A2A1E292222052A060521192A2A280210192A2A05002724
+    161906200C240B271227181F32112E061B002F29290000132217121D42454641415242454B454B20522D555241522049
+    4E41494C49434520522020E8909090A0A0A0C0C0C0484848000000D8D8D8282828606060D0D0D080404020E0E0201010
+    18202020E8E8E020E01088108080402020382020902020A09898481E1E58888810202010202018E0E000181800000008
+    90B090A0B0A0C0B0C080B040882068DE0070DE207898B64880E05020B8E088B01020001020E018E0180018E020A8E020
+    18E000C818E000E0402018E0E0183020E0E8F0F0F0F8F8F8E02008000010FF7FBF32D00000009F637942B015CB04FF7F
+    316E4A450000FF7FEF1B00020000FF7F1F42F21C0000FF7F94524A290000FF7FFF032F010000FF7FEF03D6010000FF7F
+    B542C83D0000747EFF0380010000FF67AC77131A6B2DD67EFF4B75210000FF535F4A527E0000FF4FD27E4C3AE01CED03
+    FF7F5F2500006A031F02FF03FF7FFF7FDF01120100001F235F03F2000900FF7FEA031F0100009F291A000C000000FF7F
+    7F021F000000FF7FE00306022001FF7FEB7E1F00007CFF7FFF3F007E1F00FF7FFF031F000000FF031F000C000000FF7F
+    3F0393010000000000427F03FF7FFF7F8C7E007C0000FF7FEF1B80610000FF7FEA7F5F7D000078479032871D61080390
+    0F180078810912155493999C9FA23C42B9A5B9A5423C3300031C0F1F7B1C3E3CFDB6F7F771017FFC30C07F78FFFDDDCF
+    002360FC6FD4BC3508FFC880F053F86ADF7C3D817D793CF343E70FC700FC01D2B4AD2B410E34131C413831FFEFF3E05F
+    D7D7FF3FE0F6AFDA9FFDA9E8FCDABC3E7DA9E800FFCF1FFFFD281D801C3D3CFFF42A38A93FFF407000FFC5C0BFF6AACF
+    E1D200F3E3F7F3B427775FF5FC384800FFC73FB4AD28EFAFC4CF20CE8E9F901EFFFF421CA93300FF099F8FE21F5FFD48
+    3E3FA7BFCF3C4238A87FAFFC00FFCFFFFF3F00FFCAFEFFD400FFFF2BFEFD4F00FCFC53FFFC0FF7FD30FF1E3DFC45FF87
+    1FF7BF03FF3FFE5D5400FFFC01C0830387D34F548F3CD2AA2AFC06BE3EDFDFDDCF00C80EFF7BFCF315C07FFFFFFFFFF1
+    03C2FF87FF50F800FF03C783E361F1B6537CDFDAAFF4A54AD7D755D7FFF1E06FDBF0F9F100FBF97F7BB7FF3F1ED01CAA
+    A4FFCF00FC3F131E317CF8E5F5F5D7D701FF7F4F77C7229F037D011D24386D0055CDF4053E040E00CB20F5CB11F1CB11
+    3D20F57922232223C9E5210FFFCB86CB4628FCE1C9CD4108CD09060520F7C9E0133E87E014C9210080AF22CB6C28FAC9
+    CD33061AA1471C1C1A1D1DA1CB37B0CB412802CB372322CB31C9CD4D06CD30061C7BC9219604117F800E304605283604
+    2337CB103820CB2038032A1820CB202005462337CB104F3003CB3FFE87CB203802B1FEA11807CB2038031B1A131312CB
+    2020D118C6622E801104010EF0CD4A06C6165FCD4A06D6165FFE1C20EE23118E040E081A1322230D20F9C93E01E04F16
+    1A0602CD150621C0980E037EFE0F280534E60728032318F37DF61F6F230D20EB1520DEC906200E202181FFC52A5F3A57
+    0121047BE61FFE1F20010D7BFEE038097AE603FE032002CBA97AE67CFE7C2002CB907B81227A8822C10D20CFCD0906CD
+    1A08CD09060520BE3E02E0702100D0CD29063CCD2E08CD3308CD2E08AFE0702FE00057592E0DFA4301CB7FCC7307CB7F
+    E04CF080472805F0C1A72006AF4F3E1161C9CD7307E04C3E01C9217D044F0600097EC93E01E06CCD9E07CB7FC4E108CB
+    BF47808047F0C1A72805CD6A07180178CD0906CDF5073E041108002E7CC9214B017EFE3328053D2042180C2E442AFE30
+    20397EFE3120342E340E10AF862C0D20FBE080472100027DD65EC82AB820F87DD642380EE57DC67A6F7EE14FFA3701B9
+    20E57DC65D6F78E0807EC9AFC921D90206004F09C9CDED071E002AE5217E034F0916080E6ACD2308E1CB5B20041E0818
+    E94E217E0309160818052181FF16401E000E683E80B3E20C2AE21520FBC9E04F21EE00CD09060E5106052AE20C0520FA
+    C93E20E000F0002FE60FC82E002C1F30FC3E10E000F0002F1717E60C856FF0C1BDC87DE0C1C5D5CD6A07CDED072C2C4E
+    217F03093AFE7F20022323F52AE52181FFCDD7082E83CDD708E1E0872AE52182FFCDD7082E84CDD708E1E088F1280223
+    23F0BBE6DE472AE6DE8047FABCFFCB974ECB91891FEABCFF781FEABBFF2D2AE0BF2AE0C02AE0852AE086CD0906CD1A08
+    3E30E0C2D1C1C91108004B77190D20FBC9F5CD09063E19EA1099212F990E0C3D2808320D20F92E0F18F5F1C900000000
+"""
+
+# The boot ROM hand-off: the CGB boot ROM programs the core itself.
+[boot.cpu0]
+registers = { pc = "0x0000" }
+
+[quirks]
+"sm83.oam_bug" = false
+"sm83.wave_ram_undoc" = true
+"sm83.halt_undoc" = true

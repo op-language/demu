@@ -3,18 +3,25 @@
 //! A `Machine` owns the devices, the buses, and the scheduler. The smoke
 //! machine from the bundled configuration demonstrates the assembly: a
 //! clock domain, a ROM, a RAM, and a CPU shim. The run loop advances
-//! domains in exact cross-domain order, dispatches events, and stops at
-//! sync points.
+//! domains in exact cross-domain order, dispatches events through the
+//! per-visit context, and stops at sync points or when a run hook says
+//! stop.
 
-use demu_config::model::{BootState, SystemConfig};
+use demu_config::model::{BootState, DeviceInstance, SystemConfig};
+
+use rustc_hash::FxHashMap;
 
 use crate::bus::{Bus, BusWindow, ConflictPolicy};
-use crate::device::{Device, SnapshotError};
+use crate::device::{
+    BusBank, DecodeHit, Device, DeviceSlices, EventBuffers, MachineCtx, Route, SnapshotError,
+    window_offset_of,
+};
 use crate::frequency::{Frequency, Tick};
 use crate::savestate::{
     DeviceChunk, DomainState, LoadError, SaveError, SaveState, read_save, write_save,
 };
 use crate::scheduler::Scheduler;
+use crate::triggers::TriggerEvent;
 
 /// A machine assembly failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -29,6 +36,72 @@ pub enum MachineError {
     Restore(String, #[source] SnapshotError),
 }
 
+/// A constructor for one device kind.
+pub type DeviceCtor =
+    dyn Fn(&DeviceInstance, &SystemConfig) -> Result<Box<dyn Device>, MachineError> + Send + Sync;
+
+/// The device constructor registry.
+///
+/// Device-family crates register constructors under their stable kind
+/// key at assembly time. The configuration validation checked the kind
+/// names against the static kind registry before assembly; the registry
+/// supplies the compiled constructors.
+#[derive(Default)]
+pub struct DeviceCtors {
+    ctors: FxHashMap<String, Box<DeviceCtor>>,
+}
+
+impl std::fmt::Debug for DeviceCtors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.ctors.keys()).finish()
+    }
+}
+
+impl DeviceCtors {
+    /// An empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register one constructor under its kind key.
+    pub fn register(&mut self, kind: &str, ctor: Box<DeviceCtor>) {
+        self.ctors.insert(kind.to_string(), ctor);
+    }
+
+    /// Look up one constructor.
+    pub fn get(&self, kind: &str) -> Option<&DeviceCtor> {
+        self.ctors.get(kind).map(std::convert::AsRef::as_ref)
+    }
+
+    /// The registered kind keys, sorted.
+    pub fn kinds(&self) -> Vec<&str> {
+        let mut v: Vec<&str> = self.ctors.keys().map(String::as_str).collect();
+        v.sort_unstable();
+        v
+    }
+}
+
+/// The constructors for the smoke device family.
+pub fn smoke_ctors() -> DeviceCtors {
+    let mut ctors = DeviceCtors::new();
+    ctors.register(
+        "smoke.cpu",
+        Box::new(|d, _| Ok(Box::new(devices::SmokeCpu::new(d)))),
+    );
+    ctors.register(
+        "smoke.ram",
+        Box::new(|d, _| Ok(Box::new(devices::SmokeRam::new(d)))),
+    );
+    ctors.register(
+        "smoke.rom",
+        Box::new(|d, _| Ok(Box::new(devices::SmokeRom::new(d)))),
+    );
+    ctors
+}
+
+/// The run hook: receives every runtime event and returns true to stop.
+pub type RunHook<'a> = &'a mut dyn FnMut(&TriggerEvent) -> bool;
+
 /// The machine: devices, buses, and the scheduler in one run loop.
 pub struct Machine {
     /// The resolved configuration.
@@ -39,16 +112,36 @@ pub struct Machine {
     pub buses: Vec<Bus>,
     /// The scheduler with one domain per configured clock.
     pub scheduler: Scheduler,
+    /// The connection routes resolved to device slots.
+    pub routes: Vec<Route>,
+    /// The bus index by name.
+    bus_index: FxHashMap<String, usize>,
+    /// The configured domain index per device slot.
+    slot_domain: Vec<usize>,
+    /// Scratch decode buffer, reused across accesses.
+    scratch: Vec<DecodeHit>,
+    /// Event drain buffer, reused across dispatches.
+    events: Vec<TriggerEvent>,
+    /// The dirty slots of the last dispatch.
+    dirty: Vec<usize>,
+    /// Set when a run hook reported a stop; the run loop drains it.
+    step_stopped: bool,
 }
 
 impl Machine {
-    /// Assemble a machine from a resolved configuration.
-    ///
-    /// The devices and buses come from the device-family crates at
-    /// assembly time; this core constructor wires the smoke CPU shim and
-    /// memory devices so that the framework runs before the real device
-    /// families land.
+    /// Assemble a machine from a resolved configuration with the smoke
+    /// device constructors.
     pub fn new(config: SystemConfig) -> Result<Self, MachineError> {
+        Self::assemble(config, &smoke_ctors())
+    }
+
+    /// Assemble a machine from a resolved configuration and a device
+    /// constructor registry.
+    ///
+    /// The configuration selects kinds by name; the registry supplies
+    /// the compiled constructors. Buses and windows wire up from the
+    /// configuration; connections become routed signal edges.
+    pub fn assemble(config: SystemConfig, ctors: &DeviceCtors) -> Result<Self, MachineError> {
         let domains: Vec<(String, Frequency)> = config
             .clocks
             .values()
@@ -61,8 +154,10 @@ impl Machine {
             })
             .collect();
         let scheduler = Scheduler::new(domains);
+        let mut bus_index = FxHashMap::default();
         let mut buses = Vec::new();
-        for bus in &config.buses {
+        for (i, bus) in config.buses.iter().enumerate() {
+            bus_index.insert(bus.name.clone(), i);
             let mut b = Bus::new(&bus.name, bus.address_bits);
             b.parent = bus.parent.clone();
             buses.push(b);
@@ -101,16 +196,49 @@ impl Machine {
                 });
             }
         }
+        // Resolve connection endpoints to routed slots. A bidirectional
+        // connection delivers edges in both directions.
+        let mut routes = Vec::new();
+        for conn in &config.connections {
+            let from = resolve_slot(&config, conn.from.device().as_ref())?;
+            let to = resolve_slot(&config, conn.to.device().as_ref())?;
+            routes.push(Route {
+                from,
+                from_line: conn.from.line().as_ref().to_string(),
+                to,
+                to_line: conn.to.line().as_ref().to_string(),
+            });
+            if conn.direction == demu_config::model::ConnectionDirection::Bidir {
+                routes.push(Route {
+                    from: to,
+                    from_line: conn.to.line().as_ref().to_string(),
+                    to: from,
+                    to_line: conn.from.line().as_ref().to_string(),
+                });
+            }
+        }
         let devices: Vec<Box<dyn Device>> = config
             .devices
             .iter()
-            .map(|d| build_device(d, &config))
+            .map(|d| build_device(d, &config, ctors))
             .collect::<Result<Vec<_>, _>>()?;
+        let slot_domain = config
+            .devices
+            .iter()
+            .map(|d| scheduler.domain(&d.domain).unwrap_or(0))
+            .collect();
         Ok(Self {
             config,
             devices,
             buses,
             scheduler,
+            routes,
+            bus_index,
+            slot_domain,
+            scratch: Vec::new(),
+            events: Vec::new(),
+            dirty: Vec::new(),
+            step_stopped: false,
         })
     }
 
@@ -133,40 +261,50 @@ impl Machine {
     }
 
     /// Boot every device to its configured boot state.
-    ///
-    /// The boot states attach to the smoke devices here: the configuration
-    /// is the single source of the boot data, and each device receives its
-    /// own state before `Device::boot` runs.
     pub fn boot(&mut self) {
-        for (i, d) in self.devices.iter_mut().enumerate() {
-            if let Some(state) = self.config.boot.get(&self.config.devices[i].name) {
-                if let Some(cpu) = d.as_any_mut().downcast_mut::<devices::SmokeCpu>() {
-                    cpu.attach_boot(state);
-                }
-                if let Some(ram) = d.as_any_mut().downcast_mut::<devices::SmokeRam>() {
-                    ram.attach_boot(state.clone());
-                }
-                if let Some(rom) = d.as_any_mut().downcast_mut::<devices::SmokeRom>() {
-                    rom.attach_boot(state.clone());
-                }
-            }
-        }
-        for d in &mut self.devices {
-            d.boot();
+        for (slot, device) in self.devices.iter_mut().enumerate() {
+            let name = &self.config.devices[slot].name;
+            let state = self.config.boot.get(name);
+            device.boot(state);
         }
     }
 
-    /// Seed every domain queue with the devices' declared next events.
+    /// Replace the boot state of one device before boot.
     ///
-    /// A device that declares `next_event` after boot or after its own
-    /// tick is visited by the scheduler at that time. The domain index
-    /// comes from the device's configured domain.
-    fn seed_queue(&mut self) {
-        let domain_index = self.scheduler.primary;
-        for (slot, d) in self.devices.iter().enumerate() {
-            if let Some(at) = d.next_event() {
-                self.scheduler.domains[domain_index].schedule(slot, at);
-            }
+    /// The CLI overrides the cartridge ROM path this way.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the device name is unknown.
+    pub fn override_boot(
+        &mut self,
+        device_name: &str,
+        state: BootState,
+    ) -> Result<(), MachineError> {
+        let slot = resolve_slot(&self.config, device_name)?;
+        let name = self.config.devices[slot].name.clone();
+        self.config.boot.insert(name, state);
+        Ok(())
+    }
+
+    /// The slot of one device by name.
+    pub fn device_slot(&self, name: &str) -> Option<usize> {
+        resolve_slot(&self.config, name).ok()
+    }
+
+    /// A device reference by name.
+    pub fn device_by_name(&self, name: &str) -> Option<&dyn Device> {
+        self.device_slot(name)
+            .and_then(|s| self.devices.get(s))
+            .map(|b| b.as_ref())
+    }
+
+    /// A mutable device reference by name.
+    pub fn device_by_name_mut(&mut self, name: &str) -> Option<&mut dyn Device> {
+        let slot = self.device_slot(name)?;
+        match self.devices.get_mut(slot) {
+            Some(device) => Some(device.as_mut() as &mut dyn Device),
+            None => None,
         }
     }
 
@@ -181,18 +319,62 @@ impl Machine {
     pub fn run_until(&mut self, target: Tick) {
         self.seed_queue();
         loop {
-            if !self.step_once(target) {
+            if !self.step_once(target, &mut |_| false, false) {
                 return;
             }
+        }
+    }
+
+    /// Run the machine until the primary domain reaches `target`, or
+    /// until the hook returns true for one runtime event.
+    ///
+    /// The hook receives the events devices emit; event collection is
+    /// active only while `emit` is true.
+    pub fn run_hook(&mut self, target: Tick, hook: RunHook, emit: bool) {
+        self.seed_queue();
+        loop {
+            if !self.step_once(target, hook, emit) {
+                return;
+            }
+        }
+    }
+
+    /// Seed every domain queue with the devices' declared next events.
+    ///
+    /// A device that declares `next_event` after boot is visited by the
+    /// scheduler at that time. The domain index comes from the device's
+    /// configured domain.
+    fn seed_queue(&mut self) {
+        for (slot, d) in self.devices.iter().enumerate() {
+            if let Some(at) = d.next_event() {
+                let domain = self.slot_domain[slot];
+                self.scheduler.domains[domain].schedule(slot, at);
+            }
+        }
+    }
+
+    /// Re-seed one device's declared next event.
+    ///
+    /// Scheduling bumps the device's generation, so a stale queue entry
+    /// from an earlier declaration is discarded on pop.
+    fn reschedule(&mut self, slot: usize) {
+        let domain = self.slot_domain[slot];
+        if let Some(at) = self.devices[slot].next_event() {
+            self.scheduler.domains[domain].schedule(slot, at);
         }
     }
 
     /// Step the machine once: advance the domain with the smallest
     /// instant, dispatch all events due there.
     ///
-    /// Returns false when the primary domain reached the target, or when
-    /// every queue is empty.
-    fn step_once(&mut self, target: Tick) -> bool {
+    /// Returns false when the primary domain reached the target, when
+    /// the hook stopped the run, or when every queue is empty.
+    fn step_once(
+        &mut self,
+        target: Tick,
+        hook: &mut dyn FnMut(&TriggerEvent) -> bool,
+        emit: bool,
+    ) -> bool {
         // Find the domain with the smallest pending event instant, or the
         // smallest current instant when all queues are empty.
         let mut best: Option<usize> = None;
@@ -220,21 +402,21 @@ impl Machine {
             .next_time()
             .expect("the loop found a non-empty queue");
         self.scheduler.domains[i].advance_to(next);
-        let mut reschedule: Vec<(usize, Tick)> = Vec::new();
         while let Some(event) = self.scheduler.domains[i].pop_due() {
             let tick = event.tick;
             let slot = event.device;
-            if slot < self.devices.len() {
-                self.devices[slot].tick(tick);
-                if let Some(next) = self.devices[slot].next_event()
-                    && next > tick
-                {
-                    reschedule.push((slot, next));
-                }
+            if slot >= self.devices.len() {
+                continue;
             }
-        }
-        for (slot, at) in reschedule {
-            self.scheduler.domains[i].schedule(slot, at);
+            self.dispatch(slot, tick, hook, emit);
+            if self.step_stopped {
+                return false;
+            }
+            let dirty_slots: Vec<usize> = self.dirty.drain(..).filter(|d| *d != slot).collect();
+            for dirty_slot in dirty_slots {
+                self.reschedule(dirty_slot);
+            }
+            self.reschedule(slot);
         }
         if self.scheduler.domains[self.scheduler.primary].now >= target {
             return false;
@@ -242,9 +424,114 @@ impl Machine {
         true
     }
 
+    /// Dispatch one device visit: build the context and hand over.
+    ///
+    /// The hook drains the events the visit emitted; a true return ends
+    /// the run after the dispatch completes.
+    fn dispatch(
+        &mut self,
+        slot: usize,
+        tick: Tick,
+        hook: &mut dyn FnMut(&TriggerEvent) -> bool,
+        emit: bool,
+    ) {
+        self.events.clear();
+        self.dirty.clear();
+        let Machine {
+            devices,
+            buses,
+            routes,
+            bus_index,
+            scratch,
+            events,
+            dirty,
+            ..
+        } = self;
+        let (before, rest) = devices.split_at_mut(slot);
+        let (device, after) = rest.split_first_mut().expect("dispatch slot exists");
+        let mut ctx = MachineCtx::new(
+            DeviceSlices {
+                before,
+                after,
+                caller_slot: slot,
+            },
+            BusBank {
+                buses,
+                index: bus_index,
+            },
+            routes,
+            scratch,
+            EventBuffers { events, dirty },
+            emit,
+        );
+        device.tick(tick, &mut ctx);
+        for event in self.events.drain(..) {
+            if hook(&event) {
+                self.step_stopped = true;
+                return;
+            }
+        }
+    }
+
     /// The primary domain's current tick.
     pub fn now(&self) -> Tick {
         self.scheduler.domains[self.scheduler.primary].now
+    }
+
+    /// The primary bus's name, for debug reads and writes.
+    pub fn primary_bus(&self) -> Option<&str> {
+        self.buses.first().map(|b| b.name.as_str())
+    }
+
+    /// A side-effect-free read through the bus decoder.
+    pub fn peek(&self, bus_name: &str, address: crate::frequency::Address) -> u8 {
+        let Some(bus_idx) = self.bus_index.get(bus_name).copied() else {
+            return 0xFF;
+        };
+        for hit in decode_candidates(&self.buses[bus_idx], address.0, false) {
+            let Some(device) = self.devices.get(hit.device) else {
+                continue;
+            };
+            let Some(bus) = device.bus() else {
+                continue;
+            };
+            if bus.decodes(address) {
+                return bus.peek(address);
+            }
+        }
+        0xFF
+    }
+
+    /// A debug write through the bus decoder, stamped at the current
+    /// tick. Returns true when a device accepted the write.
+    pub fn debug_write(
+        &mut self,
+        bus_name: &str,
+        address: crate::frequency::Address,
+        value: u8,
+    ) -> bool {
+        let Some(bus_idx) = self.bus_index.get(bus_name).copied() else {
+            return false;
+        };
+        let tick = self.now();
+        for hit in decode_candidates(&self.buses[bus_idx], address.0, true) {
+            let Some(device) = self.devices.get_mut(hit.device) else {
+                continue;
+            };
+            let Some(bus) = device.bus_mut() else {
+                continue;
+            };
+            if bus.decodes(address) {
+                bus.write(
+                    crate::device::AccessWidth::Byte,
+                    address,
+                    u32::from(value),
+                    tick,
+                );
+                return true;
+            }
+        }
+        false
     }
 
     /// Save the full machine state.
@@ -267,16 +554,22 @@ impl Machine {
                 .scheduler
                 .domains
                 .iter()
-                .map(|d| DomainState {
-                    name: d.name.clone(),
-                    frequency_num: d.frequency.num(),
-                    frequency_den: d.frequency.den(),
-                    now: d.now.0,
-                    events: d
+                .map(|d| {
+                    // The events sort by tick and sequence; the heap's
+                    // internal layout is not canonical across a restore.
+                    let mut events: Vec<(u64, u32, u64, u32)> = d
                         .queue
                         .iter()
-                        .map(|e| (e.tick.0, e.device as u32, e.seq))
-                        .collect(),
+                        .map(|e| (e.tick.0, e.device as u32, e.seq, e.generation))
+                        .collect();
+                    events.sort_unstable();
+                    DomainState {
+                        name: d.name.clone(),
+                        frequency_num: d.frequency.num(),
+                        frequency_den: d.frequency.den(),
+                        now: d.now.0,
+                        events,
+                    }
                 })
                 .collect(),
         };
@@ -308,28 +601,65 @@ impl Machine {
     }
 }
 
+/// Resolve one configured device name to its slot.
+fn resolve_slot(config: &SystemConfig, name: &str) -> Result<usize, MachineError> {
+    let key = demu_config::newtypes::DeviceName::new(name)
+        .map_err(|e| MachineError::Assembly(format!("bad device name '{name}': {e}")))?;
+    config
+        .devices_by_name
+        .get(&key)
+        .copied()
+        .ok_or_else(|| MachineError::Assembly(format!("unknown device '{name}'")))
+}
+
+/// Build one device from its configuration entry.
+fn build_device(
+    device: &DeviceInstance,
+    config: &SystemConfig,
+    ctors: &DeviceCtors,
+) -> Result<Box<dyn Device>, MachineError> {
+    match ctors.get(device.kind.as_str()) {
+        Some(ctor) => ctor(device, config),
+        None => Err(MachineError::Assembly(format!(
+            "no device constructor for kind '{}' in machine '{}'",
+            device.kind.as_str(),
+            config.name
+        ))),
+    }
+}
+
+/// Decode an address on a bus into candidates in priority order.
+///
+/// The machine-level debug path reuses this; the per-visit context runs
+/// its own allocation-free copy against a scratch buffer.
+fn decode_candidates(bus: &Bus, address: u32, write: bool) -> Vec<DecodeHit> {
+    let mut ranked: Vec<DecodeHit> = Vec::new();
+    for (i, w) in bus.windows.iter().enumerate() {
+        let Some(offset) = window_offset_of(w, address) else {
+            continue;
+        };
+        let prio = match &w.overlay {
+            Some(o) if write => o.write_priority,
+            Some(o) => o.read_priority,
+            None => 0,
+        };
+        ranked.push(DecodeHit {
+            priority: u32::MAX - prio,
+            window: i,
+            device: w.device,
+            offset,
+        });
+    }
+    ranked.sort_unstable();
+    ranked
+}
+
 /// Map a configured conflict policy to the core one.
 fn conflict_of(policy: demu_config::model::ConflictPolicy) -> ConflictPolicy {
     match policy {
         demu_config::model::ConflictPolicy::First => ConflictPolicy::First,
         demu_config::model::ConflictPolicy::And => ConflictPolicy::And,
         demu_config::model::ConflictPolicy::LastWins => ConflictPolicy::LastWins,
-    }
-}
-
-/// Build one device from its configuration entry.
-fn build_device(
-    device: &demu_config::model::DeviceInstance,
-    config: &SystemConfig,
-) -> Result<Box<dyn Device>, MachineError> {
-    match device.kind.as_str() {
-        "smoke.cpu" => Ok(Box::new(devices::SmokeCpu::new(device))),
-        "smoke.ram" => Ok(Box::new(devices::SmokeRam::new(device))),
-        "smoke.rom" => Ok(Box::new(devices::SmokeRom::new(device))),
-        other => Err(MachineError::Assembly(format!(
-            "no device constructor for kind '{other}' in machine '{}'",
-            config.name
-        ))),
     }
 }
 
@@ -344,27 +674,37 @@ pub mod devices {
     pub struct SmokeCpu {
         name: String,
         divider: u32,
-        boot_registers: std::collections::BTreeMap<String, u64>,
         pub ip: u64,
         next: Option<Tick>,
+        boot_registers: std::collections::BTreeMap<String, u64>,
     }
 
     impl SmokeCpu {
         /// A CPU shim from its configuration entry.
-        pub fn new(device: &demu_config::model::DeviceInstance) -> Self {
+        pub fn new(device: &DeviceInstance) -> Self {
             Self {
                 name: device.name.to_string(),
                 divider: *device.dividers.get("cpu").unwrap_or(&1),
-                boot_registers: std::collections::BTreeMap::new(),
                 ip: 0,
                 next: None,
+                boot_registers: std::collections::BTreeMap::new(),
             }
         }
+    }
 
-        /// Attach the resolved boot state for the boot phase.
-        pub fn attach_boot(&mut self, state: &BootState) {
-            if let BootState::Cpu { registers } = state {
-                self.boot_registers = registers.clone();
+    impl crate::device::CpuDebug for SmokeCpu {
+        fn registers(&self) -> std::collections::BTreeMap<String, u64> {
+            let mut map = std::collections::BTreeMap::new();
+            map.insert("ip".to_string(), self.ip);
+            map
+        }
+
+        fn set_register(&mut self, name: &str, value: u64) -> bool {
+            if name == "ip" {
+                self.ip = value;
+                true
+            } else {
+                false
             }
         }
     }
@@ -382,12 +722,23 @@ pub mod devices {
             self
         }
 
+        fn cpu(&self) -> Option<&dyn crate::device::CpuDebug> {
+            Some(self)
+        }
+
+        fn cpu_mut(&mut self) -> Option<&mut dyn crate::device::CpuDebug> {
+            Some(self)
+        }
+
         fn reset(&mut self) {
             self.ip = 0;
             self.next = None;
         }
 
-        fn boot(&mut self) {
+        fn boot(&mut self, state: Option<&BootState>) {
+            if let Some(BootState::Cpu { registers }) = state {
+                self.boot_registers = registers.clone();
+            }
             if let Some(value) = self.boot_registers.get("ip") {
                 self.ip = *value;
             }
@@ -418,10 +769,10 @@ pub mod devices {
             self.next
         }
 
-        fn tick(&mut self, _tick: Tick) {
+        fn tick(&mut self, tick: Tick, _ctx: &mut MachineCtx) {
             self.ip = self.ip.wrapping_add(1);
             let step = u64::from(self.divider.max(1));
-            self.next = Some(Tick(_tick.0 + step));
+            self.next = Some(Tick(tick.0 + step));
         }
     }
 
@@ -429,12 +780,11 @@ pub mod devices {
     pub struct SmokeRam {
         name: String,
         data: Vec<u8>,
-        boot: Option<BootState>,
     }
 
     impl SmokeRam {
         /// A RAM device from its configuration entry.
-        pub fn new(device: &demu_config::model::DeviceInstance) -> Self {
+        pub fn new(device: &DeviceInstance) -> Self {
             let size = device
                 .params
                 .get("size")
@@ -443,13 +793,7 @@ pub mod devices {
             Self {
                 name: device.name.to_string(),
                 data: vec![0; size],
-                boot: None,
             }
-        }
-
-        /// Attach the resolved boot state.
-        pub fn attach_boot(&mut self, state: BootState) {
-            self.boot = Some(state);
         }
 
         /// The current memory bytes.
@@ -473,6 +817,34 @@ pub mod devices {
         }
     }
 
+    impl crate::device::BusAccess for SmokeRam {
+        fn read(
+            &mut self,
+            _width: crate::device::AccessWidth,
+            address: crate::frequency::Address,
+            _tick: Tick,
+        ) -> u32 {
+            let idx = address.0 as usize % self.data.len();
+            u32::from(self.data[idx])
+        }
+
+        fn write(
+            &mut self,
+            _width: crate::device::AccessWidth,
+            address: crate::frequency::Address,
+            value: u32,
+            _tick: Tick,
+        ) {
+            let idx = address.0 as usize % self.data.len();
+            self.data[idx] = value as u8;
+        }
+
+        fn peek(&self, address: crate::frequency::Address) -> u8 {
+            let idx = address.0 as usize % self.data.len();
+            self.data[idx]
+        }
+    }
+
     impl Device for SmokeRam {
         fn name(&self) -> &str {
             &self.name
@@ -486,12 +858,20 @@ pub mod devices {
             self
         }
 
+        fn bus(&self) -> Option<&dyn crate::device::BusAccess> {
+            Some(self)
+        }
+
+        fn bus_mut(&mut self) -> Option<&mut dyn crate::device::BusAccess> {
+            Some(self)
+        }
+
         fn reset(&mut self) {
             self.data.fill(0);
         }
 
-        fn boot(&mut self) {
-            match &self.boot {
+        fn boot(&mut self, state: Option<&BootState>) {
+            match state {
                 Some(BootState::Ram { pattern }) => crate::boot::fill_ram(&mut self.data, *pattern),
                 Some(BootState::Hex { bytes }) => {
                     self.data.fill(0);
@@ -517,18 +897,19 @@ pub mod devices {
         }
 
         fn notify_line(&mut self, _line: &str, _level: crate::signal::Level, _tick: Tick) {}
+
+        fn tick(&mut self, _tick: Tick, _ctx: &mut MachineCtx) {}
     }
 
     /// The smoke ROM: a read-only block.
     pub struct SmokeRom {
         name: String,
         data: Vec<u8>,
-        boot: Option<BootState>,
     }
 
     impl SmokeRom {
         /// A ROM device from its configuration entry.
-        pub fn new(device: &demu_config::model::DeviceInstance) -> Self {
+        pub fn new(device: &DeviceInstance) -> Self {
             let size = device
                 .params
                 .get("size")
@@ -537,18 +918,38 @@ pub mod devices {
             Self {
                 name: device.name.to_string(),
                 data: vec![0; size],
-                boot: None,
             }
-        }
-
-        /// Attach the resolved boot state.
-        pub fn attach_boot(&mut self, state: BootState) {
-            self.boot = Some(state);
         }
 
         /// The current memory bytes.
         pub fn data(&self) -> &[u8] {
             &self.data
+        }
+    }
+
+    impl crate::device::BusAccess for SmokeRom {
+        fn read(
+            &mut self,
+            _width: crate::device::AccessWidth,
+            address: crate::frequency::Address,
+            _tick: Tick,
+        ) -> u32 {
+            let idx = address.0 as usize % self.data.len();
+            u32::from(self.data[idx])
+        }
+
+        fn write(
+            &mut self,
+            _width: crate::device::AccessWidth,
+            _address: crate::frequency::Address,
+            _value: u32,
+            _tick: Tick,
+        ) {
+        }
+
+        fn peek(&self, address: crate::frequency::Address) -> u8 {
+            let idx = address.0 as usize % self.data.len();
+            self.data[idx]
         }
     }
 
@@ -565,14 +966,27 @@ pub mod devices {
             self
         }
 
+        fn bus(&self) -> Option<&dyn crate::device::BusAccess> {
+            Some(self)
+        }
+
+        fn bus_mut(&mut self) -> Option<&mut dyn crate::device::BusAccess> {
+            Some(self)
+        }
+
         fn reset(&mut self) {}
 
-        fn boot(&mut self) {
-            match &self.boot {
+        fn boot(&mut self, state: Option<&BootState>) {
+            match state {
                 Some(BootState::Hex { bytes }) => {
                     self.data.fill(0);
                     let n = bytes.len().min(self.data.len());
                     self.data[..n].copy_from_slice(&bytes[..n]);
+                }
+                Some(BootState::Rom { path }) => {
+                    // A missing ROM file leaves the block zeroed; the
+                    // error surfaces when the machine reads zeros.
+                    let _ = crate::boot::load_rom(&mut self.data, std::path::Path::new(path));
                 }
                 _ => self.data.fill(0),
             }
@@ -593,6 +1007,8 @@ pub mod devices {
         }
 
         fn notify_line(&mut self, _line: &str, _level: crate::signal::Level, _tick: Tick) {}
+
+        fn tick(&mut self, _tick: Tick, _ctx: &mut MachineCtx) {}
     }
 }
 
@@ -665,5 +1081,36 @@ mod tests {
     fn restored_load(buf: &[u8]) -> Result<(), LoadError> {
         let mut machine = Machine::new(smoke_config()).unwrap();
         machine.load(buf)
+    }
+
+    #[test]
+    fn cpu_registers_round_trip() {
+        let mut machine = Machine::new(smoke_config()).unwrap();
+        machine.boot();
+        let out = {
+            let cpu = machine.device_by_name_mut("cpu0").expect("cpu0");
+            cpu.cpu_mut()
+                .expect("smoke cpu exposes registers")
+                .set_register("ip", 0x1234)
+        };
+        assert!(out);
+        let cpu = machine.device_by_name("cpu0").expect("cpu0");
+        let regs = cpu.cpu().expect("cpu").registers();
+        assert_eq!(regs.get("ip"), Some(&0x1234));
+    }
+
+    #[test]
+    fn run_hook_completes_when_no_events_fire() {
+        let mut machine = Machine::new(smoke_config()).unwrap();
+        machine.boot();
+        machine.run_until(Tick(100));
+        let mut machine2 = Machine::new(smoke_config()).unwrap();
+        machine2.boot();
+        machine2.run_hook(
+            Tick(100),
+            &mut |event| matches!(event, crate::triggers::TriggerEvent::Line { .. }),
+            true,
+        );
+        assert_eq!(machine2.now(), machine.now());
     }
 }

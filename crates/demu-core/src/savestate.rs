@@ -15,12 +15,13 @@ pub mod snapshot {
     //! | domain_count u32
     //! | (name_len u32 | name | freq_num u64 | freq_den u64
     //!    | now u64 | event_count u32
-    //!    | (tick u64 | device u32 | seq u64)*)*
+    //!    | (tick u64 | device u32 | seq u64 | gen u32)*)*
     //! | checksum u32
     //! ```
-
-    /// The save-state format version.
-    pub const FORMAT_VERSION: u32 = 1;
+    //!
+    //! The `gen` field is the device's event generation. A restored queue
+    //! carries generations so stale events stay stale after a restore.
+    pub const FORMAT_VERSION: u32 = 2;
 
     /// The snapshot magic bytes.
     pub const MAGIC: &[u8; 4] = b"DEMU";
@@ -85,10 +86,11 @@ pub fn write_save<W: Write>(out: &mut W, state: &SaveState) -> Result<(), SaveEr
         buf.extend_from_slice(&d.frequency_den.to_le_bytes());
         buf.extend_from_slice(&d.now.to_le_bytes());
         buf.extend_from_slice(&(d.events.len() as u32).to_le_bytes());
-        for (tick, device, seq) in &d.events {
+        for (tick, device, seq, generation) in &d.events {
             buf.extend_from_slice(&tick.to_le_bytes());
             buf.extend_from_slice(&device.to_le_bytes());
             buf.extend_from_slice(&seq.to_le_bytes());
+            buf.extend_from_slice(&generation.to_le_bytes());
         }
     }
     let checksum = checksum32(&buf);
@@ -204,7 +206,8 @@ pub fn read_save(buf: &[u8], machine_hash: u64) -> Result<SaveState, LoadError> 
             let tick = read_u64(buf, &mut pos)?;
             let device = read_u32(buf, &mut pos)?;
             let seq = read_u64(buf, &mut pos)?;
-            events.push((tick, device, seq));
+            let generation = read_u32(buf, &mut pos)?;
+            events.push((tick, device, seq, generation));
         }
         domains.push(DomainState {
             name,
@@ -271,8 +274,8 @@ pub struct DomainState {
     pub frequency_den: u64,
     /// The current tick.
     pub now: u64,
-    /// The pending events as `(tick, device, seq)`.
-    pub events: Vec<(u64, u32, u64)>,
+    /// The pending events as `(tick, device, seq, gen)`.
+    pub events: Vec<(u64, u32, u64, u32)>,
 }
 
 impl DomainState {
@@ -282,11 +285,19 @@ impl DomainState {
             .map_err(|_| LoadError::Format("domain frequency is invalid"))?;
         let mut domain = ClockDomain::new(&self.name, frequency);
         domain.now = crate::frequency::Tick(self.now);
-        for (tick, device, seq) in self.events {
+        for (tick, device, seq, generation) in self.events {
+            let slot = device as usize;
+            while domain.gens.len() <= slot {
+                domain.gens.push(0);
+            }
+            if generation > domain.gens[slot] {
+                domain.gens[slot] = generation;
+            }
             domain.queue.push(Event {
                 tick: crate::frequency::Tick(tick),
-                device: device as usize,
+                device: slot,
                 seq,
+                generation,
             });
         }
         Ok(domain)
@@ -319,7 +330,7 @@ mod tests {
                 frequency_num: 4194304,
                 frequency_den: 1,
                 now: 777,
-                events: vec![(1000, 1, 3), (1000, 0, 4)],
+                events: vec![(1000, 1, 3, 1), (1000, 0, 4, 2)],
             }],
         }
     }

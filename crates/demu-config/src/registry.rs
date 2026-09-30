@@ -108,6 +108,28 @@ pub fn core_registry() -> &'static KindRegistry {
         ));
         r.register(KindInfo::new("smoke.ram", DomainRequirement::Required, &[]));
         r.register(KindInfo::new("smoke.rom", DomainRequirement::Required, &[]));
+        // The SM83 machine family: Game Boy and Game Boy Color.
+        r.register(KindInfo::new(
+            "sm83.cpu",
+            DomainRequirement::Required,
+            &["oam_bug", "wave_ram_undoc", "halt_undoc"],
+        ));
+        for kind in [
+            "sm83.wram",
+            "sm83.hram",
+            "sm83.bootrom",
+            "sm83.cart",
+            "sm83.dma",
+            "sm83.hdma",
+            "sm83.timer",
+            "sm83.joypad",
+            "sm83.serial",
+            "sm83.io",
+        ] {
+            r.register(KindInfo::new(kind, DomainRequirement::Required, &[]));
+        }
+        r.register(KindInfo::new("sm83.ppu", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("sm83.apu", DomainRequirement::Required, &[]));
         r
     })
 }
@@ -128,6 +150,16 @@ mod tests {
     #[test]
     fn registry_rejects_unknown() {
         let r = core_registry();
-        assert!(r.get(&KindName::new("sm83.cpu").unwrap()).is_none());
+        assert!(r.get(&KindName::new("sm83.ppu").unwrap()).is_some());
+        assert!(r.get(&KindName::new("rp2A03.cpu").unwrap()).is_none());
+    }
+
+    #[test]
+    fn sm83_kinds_declare_quirks() {
+        let r = core_registry();
+        let cpu = r.get(&KindName::new("sm83.cpu").unwrap()).unwrap();
+        assert!(cpu.quirks.contains(&"oam_bug"));
+        assert!(cpu.quirks.contains(&"wave_ram_undoc"));
+        assert!(cpu.quirks.contains(&"halt_undoc"));
     }
 }

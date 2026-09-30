@@ -1,0 +1,277 @@
+# Nintendo Game Boy (DMG), the canonical system configuration.
+#
+# One clock domain at the 4194304 Hz crystal. The machine boots through
+# the byte-identical 256-byte boot ROM reconstruction from the dmg-rom
+# project; the $FF50 write at the end of the boot ROM unmaps it, and the
+# cartridge takes over at $0100.
+
+[system]
+name = "Nintendo Game Boy"
+triple = "sm83-nintendo-gameboy"
+description = "The 4.19 MHz monochrome Game Boy with the DMG boot ROM."
+
+[clock.main]
+frequency = "4194304"
+origin = "DMG crystal; the CPU T-cycle and the PPU dot clock ride one domain"
+
+[[device]]
+name = "cpu0"
+kind = "sm83.cpu"
+domain = "main"
+[device.dividers]
+cpu = 1
+
+[[device]]
+name = "bootrom"
+kind = "sm83.bootrom"
+domain = "main"
+[device.params]
+cgb = false
+
+[[device]]
+name = "cart"
+kind = "sm83.cart"
+domain = "main"
+
+[[device]]
+name = "wram"
+kind = "sm83.wram"
+domain = "main"
+[device.params]
+cgb = false
+
+[[device]]
+name = "hram"
+kind = "sm83.hram"
+domain = "main"
+
+[[device]]
+name = "ppu"
+kind = "sm83.ppu"
+domain = "main"
+[device.params]
+cgb = false
+
+[[device]]
+name = "apu"
+kind = "sm83.apu"
+domain = "main"
+[device.params]
+cgb = false
+
+[[device]]
+name = "dma"
+kind = "sm83.dma"
+domain = "main"
+
+[[device]]
+name = "timer"
+kind = "sm83.timer"
+domain = "main"
+
+[[device]]
+name = "joypad"
+kind = "sm83.joypad"
+domain = "main"
+
+[[device]]
+name = "serial"
+kind = "sm83.serial"
+domain = "main"
+
+[[device]]
+name = "io"
+kind = "sm83.io"
+domain = "main"
+[device.params]
+cgb = false
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[window]]
+name = "w_bootrom"
+bus = "cpu"
+device = "bootrom"
+base = "0x0000"
+size = "0x0100"
+overlay = "boot"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_cart_rom0"
+bus = "cpu"
+device = "cart"
+base = "0x0000"
+size = "0x4000"
+overlay = "boot"
+
+[[window]]
+name = "w_ppu_vram"
+bus = "cpu"
+device = "ppu"
+base = "0x8000"
+size = "0x2000"
+
+[[window]]
+name = "w_cart_romn"
+bus = "cpu"
+device = "cart"
+base = "0x4000"
+size = "0x4000"
+
+[[window]]
+name = "w_cart_sram"
+bus = "cpu"
+device = "cart"
+base = "0xA000"
+size = "0x2000"
+
+[[window]]
+name = "w_wram"
+bus = "cpu"
+device = "wram"
+base = "0xC000"
+size = "0x2000"
+
+[[window]]
+name = "w_wram_echo"
+bus = "cpu"
+device = "wram"
+base = "0xE000"
+size = "0x1E00"
+
+[[window]]
+name = "w_io"
+bus = "cpu"
+device = "io"
+base = "0xFF00"
+size = "0x80"
+
+[[window]]
+name = "w_joypad"
+bus = "cpu"
+device = "joypad"
+base = "0xFF00"
+size = "0x01"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_serial"
+bus = "cpu"
+device = "serial"
+base = "0xFF01"
+size = "0x02"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_timer"
+bus = "cpu"
+device = "timer"
+base = "0xFF04"
+size = "0x04"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_apu"
+bus = "cpu"
+device = "apu"
+base = "0xFF10"
+size = "0x20"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_ppu_regs"
+bus = "cpu"
+device = "ppu"
+base = "0xFF40"
+size = "0x0C"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_dma"
+bus = "cpu"
+device = "dma"
+base = "0xFF46"
+size = "0x01"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_hram"
+bus = "cpu"
+device = "hram"
+base = "0xFF80"
+size = "0x7F"
+
+[[window]]
+name = "w_bootrom_bank"
+bus = "cpu"
+device = "bootrom"
+base = "0xFF50"
+size = "0x01"
+overlay = "regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[connection]]
+from = "ppu.vblank"
+to = "cpu0.vblank"
+semantics = "irq"
+
+[[connection]]
+from = "ppu.stat"
+to = "cpu0.stat"
+semantics = "irq"
+
+[[connection]]
+from = "timer.int"
+to = "cpu0.timer"
+semantics = "irq"
+
+[[connection]]
+from = "joypad.int"
+to = "cpu0.joypad"
+semantics = "irq"
+
+[[connection]]
+from = "serial.int"
+to = "cpu0.serial"
+semantics = "irq"
+
+[[connection]]
+from = "timer.div_apu"
+to = "apu.div_apu"
+semantics = "display-sync"
+
+[boot.bootrom]
+hex = """
+    31FEFFAF21FF9F32CB7C20FB2126FF0E113E8032E20C3EF3E2323E77773EFCE0471104012110801ACD9500CD9600137B
+    FE3420F311D80006081A1322230520F93E19EA1099212F990E0C3D2808320D20F92E0F18F3673E6457E0423E91E04004
+    1E020E0CF044FE9020FA0D20F71D20F20E13247C1E83FE6228061EC1FE6420067BE20C3E87E2F04290E0421520D20520
+    4F162018CB4F0604C5CB1117C1CB11170520F522232223C9CEED6666CC0D000B03730083000C000D0008111F8889000E
+    DCCC6EE6DDDDD999BBBB67636E0EECCCDDDC999FBBB9333E3C42B9A5B9A5423C21040111A8001A13BE20FE237DFE3420
+    F506197886230520FB8620FE3E01E050
+"""
+
+[boot.cpu0]
+registers = { pc = "0x0000" }
+
+[quirks]
+"sm83.oam_bug" = true
+"sm83.wave_ram_undoc" = true
+"sm83.halt_undoc" = true

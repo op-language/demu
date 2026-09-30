@@ -117,9 +117,13 @@ pub fn dispatch(
             let units = match words.first() {
                 Some(text) => demu_config::model::parse_number(text)
                     .ok_or_else(|| CommandError::BadArgs(format!("not a number: {text}")))?,
-                None => 0,
+                None => u64::MAX,
             };
-            service.run(units)
+            if units == u64::MAX {
+                service.continue_run()
+            } else {
+                service.run(units)
+            }
         }
         "step" => {
             let units = match words.first() {
@@ -128,6 +132,23 @@ pub fn dispatch(
                 None => 1,
             };
             service.step(units)
+        }
+        "run-until" => {
+            let spec = args.trim();
+            if spec.is_empty() {
+                return Err(CommandError::BadArgs(
+                    "usage: run-until vblank|irq|fetch <addr>|read <addr>|write <addr>".into(),
+                ));
+            }
+            service.run_until(spec)
+        }
+        "run-frame" => {
+            let frames = match words.first() {
+                Some(text) => demu_config::model::parse_number(text)
+                    .ok_or_else(|| CommandError::BadArgs(format!("not a number: {text}")))?,
+                None => 1,
+            };
+            service.run_frame(frames)
         }
         "break" => {
             let [token] = words.as_slice() else {
@@ -139,6 +160,82 @@ pub fn dispatch(
             Ok(crate::service::CommandOutput::plain(format!(
                 "trigger {id} set"
             )))
+        }
+        "dump" => {
+            let [addr, n, path] = words.as_slice() else {
+                return Err(CommandError::BadArgs(
+                    "usage: dump <addr> <n> <file>".to_string(),
+                ));
+            };
+            let n = demu_config::model::parse_number(n)
+                .ok_or_else(|| CommandError::BadArgs(format!("not a number: {n}")))?;
+            let n = u32::try_from(n).map_err(|_| CommandError::BadArgs("n too large".into()))?;
+            service.dump_file(addr, n, path)
+        }
+        "fill" => {
+            let [addr, n, byte] = words.as_slice() else {
+                return Err(CommandError::BadArgs(
+                    "usage: fill <addr> <n> <byte>".to_string(),
+                ));
+            };
+            let n = demu_config::model::parse_number(n)
+                .ok_or_else(|| CommandError::BadArgs(format!("not a number: {n}")))?;
+            let n = u32::try_from(n).map_err(|_| CommandError::BadArgs("n too large".into()))?;
+            let byte = demu_config::model::parse_number(byte)
+                .ok_or_else(|| CommandError::BadArgs(format!("not a number: {byte}")))?;
+            let byte =
+                u8::try_from(byte).map_err(|_| CommandError::BadArgs("byte too large".into()))?;
+            service.fill(addr, n, byte)
+        }
+        "screenshot" => {
+            let mut path: Option<String> = None;
+            let mut png = false;
+            for word in words {
+                match word {
+                    "--png" => png = true,
+                    "--ppm" => {}
+                    other => {
+                        if path.is_some() {
+                            return Err(CommandError::BadArgs(
+                                "usage: screenshot [--ppm|--png] <path>".into(),
+                            ));
+                        }
+                        path = Some(other.to_string());
+                    }
+                }
+            }
+            let Some(path) = path else {
+                return Err(CommandError::BadArgs(
+                    "usage: screenshot [--ppm|--png] <path>".into(),
+                ));
+            };
+            let format = if png {
+                Some(crate::service::ShotFormat::Png)
+            } else {
+                None
+            };
+            service.screenshot(&path, format)
+        }
+        "dump-vram" | "dump-nametable" | "dump-oam" | "dump-palette" | "dump-framebuffer" => {
+            let [path] = words.as_slice() else {
+                return Err(CommandError::BadArgs(format!("usage: {cmd} <path>")));
+            };
+            let layer = match cmd {
+                "dump-vram" => demu_core::VideoLayer::Vram,
+                "dump-nametable" => demu_core::VideoLayer::NameTable,
+                "dump-oam" => demu_core::VideoLayer::Oam,
+                "dump-palette" => demu_core::VideoLayer::Palette,
+                _ => demu_core::VideoLayer::Framebuffer,
+            };
+            service.dump_layer(layer, path)
+        }
+        "inject" => {
+            let [device, event @ ..] = words.as_slice() else {
+                return Err(CommandError::BadArgs(
+                    "usage: inject <device> <event>".to_string(),
+                ));
+            };
+            service.inject(device, &event.join(" "))
         }
         "watch" => {
             let [token] = words.as_slice() else {
