@@ -10,3 +10,6 @@ description = "Cartridge loaders and mappers."
 demu-config = { version = "0.1.0", path = "../demu-config" }
 demu-core = { version = "0.1.0", path = "../demu-core" }
 thiserror = "2.0.20"
+
+[dev-dependencies]
+toml = "1"

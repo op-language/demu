@@ -64,6 +64,12 @@ pub const APPLE_IIE: &str = include_str!("../../../configs/mos6502-apple-iie.tom
 pub const APPLE_IIE_ENHANCED: &str =
     include_str!("../../../configs/mos6502-apple-iie-enhanced.toml");
 
+/// The Nintendo SNES.
+pub const SNES: &str = include_str!("../../../configs/wdc65c816-nintendo-snes.toml");
+
+/// The Apple IIgs.
+pub const APPLE_IIGS: &str = include_str!("../../../configs/wdc65c816-apple-iigs.toml");
+
 /// A bundled config source: the triple name and the embedded text.
 pub struct BundledConfig {
     /// The triple name that selects this config.
@@ -145,6 +151,14 @@ pub const BUNDLED: &[BundledConfig] = &[
     BundledConfig {
         triple: "mos6502-apple-iie-enhanced",
         text: APPLE_IIE_ENHANCED,
+    },
+    BundledConfig {
+        triple: "wdc65c816-nintendo-snes",
+        text: SNES,
+    },
+    BundledConfig {
+        triple: "wdc65c816-apple-iigs",
+        text: APPLE_IIGS,
     },
 ];
 

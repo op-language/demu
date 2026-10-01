@@ -11,9 +11,11 @@
 
 pub mod atari;
 pub mod nes;
+pub mod snes;
 
 pub use atari::{Atari2600Cart, Atari5200Cart, Atari7800Cart};
 pub use nes::{NesCart, NesHeader, NesMapper};
+pub use snes::SnesCart;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess};

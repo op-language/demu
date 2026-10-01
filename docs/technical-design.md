@@ -522,7 +522,7 @@ values, and the hardware evidence that motivates each flag.
 | Z80 (Sinclair, TI-85) | ZEXALL, known screens | startup screens |
 | m68000 (Genesis, Neo Geo) | CPU tests, bus arbiter | boot screens |
 
-Each acceptance phase records pass counts and screenshots in
+Each acceptance run records pass counts and screenshots in
 `docs/manual/evidence/`.
 
 ## 17. Performance and build notes
@@ -539,7 +539,7 @@ logs to stdout in JSON mode.
 
 ## 18. Repository verification
 
-The standard verification set for every phase:
+The standard verification set for every change:
 
 ```
 cargo fmt --check
@@ -548,7 +548,7 @@ cargo test --workspace
 cargo build --workspace
 ```
 
-Documentation phases add `cargo doc --no-deps`.
+Documentation work adds `cargo doc --no-deps`.
 ## 19. As-built notes: NES
 
 The NES machines of the 6502 family implement this design. The notes
@@ -640,7 +640,7 @@ divided by two and the CPU by four.
   The serial port and the pot scan timing are stubs.
 - Per-console test-ROM patterns and BIOS checksum runs remain pending
   a follow-up evidence pass with real ROM assets; the acceptance
-  programs of this phase are synthetic images with recorded outputs.
+  programs of these machines are synthetic images with recorded outputs.
 
 ## 21. As-built notes: Atari 800, Commodore 64, Apple II
 
@@ -727,3 +727,96 @@ devices of the earlier families and add the computer-specific chips.
   pending the follow-up evidence pass, with the serial line checks of
   POKEY and the CIA; the paddles, buttons, and speaker toggles count
   as observable stubs.
+
+## 22. As-built notes: SNES and Apple IIgs
+
+The 65C816 machine families are the first two-domain systems, and
+they exercised the cross-domain machinery for the first time in an
+assembled machine.
+
+- The scheduler gained its secondary-domain bound: `step_once`
+  compares every domain's pending event against the target's exact
+  real time through the rational cross-multiplication, so a
+  secondary domain free-runs only up to the target instant and the
+  run loop terminates. Single-domain machines keep the same
+  behavior, because the compare reduces to the raw tick target for
+  the primary domain. The SnesPad taught the queue lesson: a
+  device whose boot schedules a visit but whose tick does not
+  advance the schedule loops the scheduler forever, so a device
+  with no periodic work declares no next visit.
+- The 65C816 core runs all 256 opcodes in both emulation and
+  native forms, with the M/X register widths, the direct page, the
+  data and program banks, the block move, WAI and STP, and the
+  interrupt vector tables of both modes. One instruction runs per
+  visit; every bus access carries its cycle stamp. The tests
+  include one deterministic opcode sweep over the whole table.
+- The SNES sound die (`apu.core`) holds the full SPC700 core
+  (256 opcodes, the timers with their precounter, the DIV/MUL
+  unit, the bit operations, and the DSP bridge) and the S-DSP
+  engine (eight voices, BRR decode, envelope, echo and noise) in
+  one device on the sound domain. The audio ports work as latched
+  registers: the CPU window answers $2140-$217F and the SPC sees
+  $F4-$F7, each side sampling at its own instruction boundaries.
+  The config declares the crossing as the `async-port` connection
+  between the two devices; the bytes travel through the port
+  window's ownership and the die's latches, not through the
+  connection's line path, which carries no edges in this build.
+  The published port race (a read that overlaps a write returns
+  the OR of the old and new bytes) ships behind the
+  `apu.port_race_or` quirk with a deterministic one-visit window;
+  the window closes at the next visit boundary rather than the
+  exact sub-cycle strobe. The IPL boot handshake is not modeled;
+  the boot state preloads the sound RAM and the reset vector.
+  SLEEP and STOP halt only the core, while the timers and the DSP
+  keep the sample clock exact, and the halt state rides the
+  snapshot.
+- The S-PPU renders one line per visit over the composed modes 0
+  through 7 (with EXTBG), the sprite evaluation with the time-over
+  latch, the color math, the mosaic, and the counter/latch
+  registers of both dies in one device. The per-dot timing,
+  interlace, window masks, and direct color stand as recorded
+  approximations. The 5A22 support die (`snes.sys`) carries the
+  DMA and HDMA engines with their halt pulses to the CPU on the
+  declared line, the multiplication and division units, the H and
+  V timers with a fixed-dot H approximation, and the auto-joypad
+  read.
+- The SNES memory windows follow the published map. The bus mirror
+  form repeats on the stride boundary (repeat k at `base + k*stride`
+  carrying the first `size` bytes), which the SNES bank layout and
+  the sparse WRAM mirror need; the decoder fix also repaired the
+  TIA's page mirrors. A window that mirrors a bank form declares the
+  count of repeats after the primary range: the LoROM ROM and SRAM
+  regions are four windows, each with one mirror stride of one bank.
+- The Apple IIgs joins as `iigs.mega2` (the console glue: the
+  keyboard, the IIe switch set, the IIgs new-video, shadow, clock,
+  CYA, and interrupt registers, and the state register), `iigs.iwm`
+  (the disk port at the IWM state form: the phase pairs, the drive
+  enable and select, and the Q7/Q6 data, status, handshake, and
+  mode register path), and `iigs.doc` (the Ensoniq DOC with the
+  sound GLU face at $C03C-$C03F). The Mega II answers the console
+  page; the DOC and IWM windows overlay it. The language-card and
+  auxiliary banking forms, the shadow copy engine, the ADB mouse
+  and keyboard registers, and the one-second and quarter-second
+  interrupt timers are not modeled; their readbacks return the
+  stored or open-bus forms. The Doc's oscillator scan uses the
+  published frequency-multiply form of one phase step per visit
+  and its register map follows the ES5503 group layout with the
+  two bytes at $E0/$E1.
+- The IIgs runs one domain at 28636360 Hz with the CPU on ten, the
+  video on four, and the Doc on fourteen per the sound GLU's
+  divider form. The boot view keeps the monitor ROM mapped at bank
+  $00 $F000-$FFFF; the extended ROM banks and the language-card
+  views stay out of the build. The IIgs video reuses the Apple
+  device with the classic 7.159090 MHz dot clock.
+- The acceptance evidence runs the synthetic forms: the SNES cart
+  test walks the reset vector, the PPU setup, the audio-port
+  write and readback, and one mode-one DMA burst that fills VRAM
+  through the $2118/$2119 pair, and the IIgs monitor lands its
+  banner in the text page and parks through the switch walk. The
+  async determinism test runs two machines of the same inputs to
+  one target and compares full save states byte for byte across
+  both domains, and the save and restore tests repeat the form
+  mid-run. The real test-ROM suites, the SameBoy-class
+  cross-checks, and the BIOS checksum runs remain pending the
+  follow-up evidence pass with real ROM assets, per the precedent the
+  SM83 and NES families set.

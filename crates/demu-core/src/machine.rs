@@ -370,7 +370,13 @@ impl Machine {
     /// instant, dispatch all events due there.
     ///
     /// Returns false when the primary domain reached the target, when
-    /// the hook stopped the run, or when every queue is empty.
+    /// the hook stopped the run, or when every queue is empty. Any
+    /// pending event past the target's exact real time is out of
+    /// scope: for the primary's own domain that is the raw tick
+    /// target, and for a secondary domain the instant compares
+    /// against the target's real time through the exact
+    /// cross-multiplication in
+    /// [`crate::scheduler::compare_instants`].
     fn step_once(
         &mut self,
         target: Tick,
@@ -379,10 +385,16 @@ impl Machine {
     ) -> bool {
         // Find the domain with the smallest pending event instant, or the
         // smallest current instant when all queues are empty.
+        let target_instant = (
+            target,
+            self.scheduler.domains[self.scheduler.primary].frequency,
+        );
         let mut best: Option<usize> = None;
         for (i, d) in self.scheduler.domains.iter().enumerate() {
             let Some(next) = d.next_time() else { continue };
-            if next > target && d.name == self.scheduler.primary_name() {
+            if crate::scheduler::compare_instants((next, d.frequency), target_instant)
+                == std::cmp::Ordering::Greater
+            {
                 continue;
             }
             match best {

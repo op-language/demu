@@ -1,17 +1,20 @@
-//! The SM83 PPU.
+//! The video device family: the SM83 PPU, the NES PPU, the Atari TIA,
+//! CTIA/GTIA, MARIA, and ANTIC, the VIC-II, the Apple II video, and
+//! the SNES S-PPU1/PPU2.
 //!
-//! The pixel processing unit walks one dot per domain tick, 70224 dots
-//! per frame across 154 lines. Modes 2, 3, and 0 share the visible
-//! lines; mode 1 fills the rest. Mode 3 length follows the scroll,
-//! window, and object penalties of the real pipeline, and the line
-//! renders from the register state at its start, so per-line raster
-//! effects are exact. The CGB adds the second VRAM bank, the color
-//! palettes, and the object priority mode.
+//! The SM83 pixel processing unit walks one dot per domain tick,
+//! 70224 dots per frame across 154 lines. Modes 2, 3, and 0 share the
+//! visible lines; mode 1 fills the rest. Mode 3 length follows the
+//! scroll, window, and object penalties of the real pipeline, and the
+//! line renders from the register state at its start, so per-line
+//! raster effects are exact. The CGB adds the second VRAM bank, the
+//! color palettes, and the object priority mode.
 
 pub mod antic;
 pub mod apple;
 pub mod maria;
 pub mod nes;
+pub mod snesppu;
 pub mod tia;
 pub mod vic;
 
@@ -19,6 +22,7 @@ pub use antic::Antic;
 pub use apple::AppleVideo;
 pub use maria::Maria;
 pub use nes::NesPpu;
+pub use snesppu::SnesPpu;
 pub use tia::Tia;
 pub use tia::color_rgb as tia_color_rgb;
 pub use vic::Vic;

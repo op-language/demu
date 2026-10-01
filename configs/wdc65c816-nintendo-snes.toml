@@ -1,0 +1,230 @@
+# Nintendo SNES (Super Famicom), the canonical system configuration.
+#
+# Two clock domains: the main domain at the NTSC master crystal
+# carrying the 65C816 and the S-PPU on divider chains, and the sound
+# domain at the S-SMP crystal. The two never share a timeline; the
+# audio ports cross through the declared async port connection. The
+# CPU and the cart boot from the positional ROM image; the sound die
+# boots its own small program.
+#
+# The memory windows follow the LoROM map: the cart ROM answers
+# $8000-$FFFF of banks $00-$3F with the half repeated one bank apart
+# at $80-$BF, and the SRAM answers $6000-$7FFF of banks $30-$3F and
+# $B0-$BF. The mirrors repeat on the bank stride.
+
+[system]
+name = "Nintendo SNES"
+triple = "wdc65c816-nintendo-snes"
+description = "The dual-crystal SNES with the S-PPU, the 5A22 support die, and the S-SMP sound die."
+
+[clock.main]
+frequency = "236250000/11"
+origin = "NTSC master crystal; the 65C816 sits at /6 and the S-PPU dot at /4"
+
+[clock.sound]
+frequency = "1024000"
+origin = "the S-SMP/S-DSP crystal, asynchronous to the main domain"
+
+[[device]]
+name = "cpu0"
+kind = "wdc65c816.cpu"
+domain = "main"
+[device.dividers]
+cpu = 6
+
+[[device]]
+name = "ppu"
+kind = "snes.ppu"
+domain = "main"
+[device.dividers]
+dot = 4
+
+[[device]]
+name = "sys"
+kind = "snes.sys"
+domain = "main"
+[device.dividers]
+cpu = 6
+
+[[device]]
+name = "wram"
+kind = "snes.wram"
+domain = "main"
+
+[[device]]
+name = "pad"
+kind = "snes.pad"
+domain = "main"
+
+[[device]]
+name = "cart"
+kind = "snes.cart"
+domain = "main"
+[device.params]
+form = "lorom"
+sram = 8192
+
+[[device]]
+name = "apu"
+kind = "apu.core"
+domain = "sound"
+[device.dividers]
+cpu = 1
+
+[[bus]]
+name = "cpu"
+address_bits = 24
+owner = "cpu0"
+
+[[window]]
+name = "w_ppu"
+bus = "cpu"
+device = "ppu"
+base = "0x2100"
+size = "0x0040"
+
+[[window]]
+name = "w_apu_ports"
+bus = "cpu"
+device = "apu"
+base = "0x2140"
+size = "0x0040"
+
+[[window]]
+name = "w_wram_port"
+bus = "cpu"
+device = "wram"
+base = "0x2180"
+size = "0x0004"
+
+[[window]]
+name = "w_pad"
+bus = "cpu"
+device = "pad"
+base = "0x4016"
+size = "0x0002"
+
+[[window]]
+name = "w_sys_regs"
+bus = "cpu"
+device = "sys"
+base = "0x4200"
+size = "0x0020"
+
+[[window]]
+name = "w_sys_chan"
+bus = "cpu"
+device = "sys"
+base = "0x4300"
+size = "0x0080"
+
+[[window]]
+name = "w_wram_banks"
+bus = "cpu"
+device = "wram"
+base = "0x7E0000"
+size = "0x020000"
+
+[[window]]
+name = "w_wram_mirror_low"
+bus = "cpu"
+device = "wram"
+base = "0x000000"
+size = "0x002000"
+mirror_stride = "0x010000"
+mirror_count = 63
+
+[[window]]
+name = "w_wram_mirror_high"
+bus = "cpu"
+device = "wram"
+base = "0x800000"
+size = "0x002000"
+mirror_stride = "0x010000"
+mirror_count = 63
+
+# The cart's LoROM windows: the ROM half of each bank, and the SRAM.
+[[window]]
+name = "w_cart_rom_low"
+bus = "cpu"
+device = "cart"
+base = "0x008000"
+size = "0x008000"
+mirror_stride = "0x010000"
+mirror_count = 63
+
+[[window]]
+name = "w_cart_rom_high"
+bus = "cpu"
+device = "cart"
+base = "0x808000"
+size = "0x008000"
+mirror_stride = "0x010000"
+mirror_count = 63
+
+[[window]]
+name = "w_cart_sram_low"
+bus = "cpu"
+device = "cart"
+base = "0x306000"
+size = "0x002000"
+mirror_stride = "0x010000"
+mirror_count = 15
+
+[[window]]
+name = "w_cart_sram_high"
+bus = "cpu"
+device = "cart"
+base = "0xB06000"
+size = "0x002000"
+mirror_stride = "0x010000"
+mirror_count = 15
+
+# The PPU line walk feeds the support die; the sound region crossing
+# stays declarative: the audio ports exchange bytes through the
+# window at $2140-$217F while each side samples in its own domain.
+[[connection]]
+from = "ppu.scanline"
+to = "sys.scanline"
+semantics = "display-sync"
+
+[[connection]]
+from = "ppu.nmi"
+to = "sys.vblank"
+semantics = "display-sync"
+
+[[connection]]
+from = "sys.nmi"
+to = "cpu0.nmi"
+semantics = "irq"
+
+[[connection]]
+from = "sys.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+[[connection]]
+from = "sys.halt"
+to = "cpu0.halt"
+semantics = "dma-request"
+
+[[connection]]
+from = "cpu0.ports"
+to = "apu.ports"
+semantics = "async-port"
+
+# The sound die boots its idle program: it clears port zero and
+# loops on itself; the timers free-run on the sound domain. The
+# call lands in the zeroed sound RAM and loops back to the start.
+[boot.apu]
+hex = """
+    E800C4F43F0003
+"""
+
+# The work RAM boots zeroed; the pad and the PPU boot to their reset
+# forms.
+[boot.wram]
+pattern = "zero"
+
+[quirks]
+"apu.port_race_or" = false

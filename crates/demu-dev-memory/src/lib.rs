@@ -1,8 +1,11 @@
-//! The memory devices: the SM83 work RAM, high RAM, and boot ROM, and
-//! the flat RAM and mask ROM of the Atari machine families.
+//! The memory devices: the SM83 work RAM, high RAM, and boot ROM, the
+//! flat RAM and mask ROM of the Atari machine families, and the SNES
+//! work RAM.
 
+pub mod sneswram;
 mod static_ram;
 
+pub use sneswram::SnesWram;
 pub use static_ram::StaticRam;
 
 use demu_config::model::BootState;

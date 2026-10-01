@@ -37,6 +37,7 @@ dependencies = [
  "demu-core",
  "demu-cpu-mos6502",
  "demu-cpu-sm83",
+ "demu-cpu-wdc65c816",
  "demu-dev-audio",
  "demu-dev-cartridge",
  "demu-dev-dma",
@@ -101,6 +102,10 @@ dependencies = [
 [[package]]
 name = "demu-cpu-wdc65c816"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+]
 
 [[package]]
 name = "demu-cpu-z80"
@@ -122,6 +127,7 @@ dependencies = [
  "demu-config",
  "demu-core",
  "thiserror",
+ "toml",
 ]
 
 [[package]]
@@ -168,6 +174,7 @@ dependencies = [
  "demu-config",
  "demu-core",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

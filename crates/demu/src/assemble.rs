@@ -2,24 +2,33 @@
 //!
 //! The binary composes the device constructors of the machine
 //! families: the Game Boy and Game Boy Color of the SM83 family, the
-//! NES of the 6502 family, and the 2600, 5200, and 7800 of the Atari
-//! family. The configuration selects kinds by name; this registry
-//! supplies the compiled constructors.
+//! NES and the Apple II machines of the 6502 family, the 2600, 5200,
+//! 800, and 7800 forms of the Atari and Commodore families, and the
+//! SNES and Apple IIgs of the 65C816 family. The configuration
+//! selects kinds by name; this registry supplies the compiled
+//! constructors.
 
 use demu_config::model::DeviceInstance;
 use demu_core::device::Device;
 use demu_core::machine::{DeviceCtors, MachineError};
 use demu_cpu_sm83::CpuDevice as Sm83CpuDevice;
 use demu_cpu_sm83::Sm83;
+use demu_cpu_wdc65c816::CpuDevice as WdcCpuDevice;
+use demu_cpu_wdc65c816::Wdc65c816;
 use demu_dev_audio::Apu;
+use demu_dev_audio::IigsDoc;
 use demu_dev_audio::NesApu;
+use demu_dev_audio::apu::Apu as SnesApu;
 use demu_dev_cartridge::Cart;
 use demu_dev_cartridge::NesCart;
-use demu_dev_dma::{Hdma, OamDma};
-use demu_dev_io::{Io, Joypad};
+use demu_dev_cartridge::SnesCart;
+use demu_dev_dma::{Hdma, OamDma, SnesSys};
+use demu_dev_io::Iwm;
+use demu_dev_io::{Io, Joypad, Mega2, SnesPad};
 use demu_dev_memory::{Bootrom, Hram, Wram};
 use demu_dev_video::NesPpu;
 use demu_dev_video::Ppu;
+use demu_dev_video::SnesPpu;
 
 /// The device kind that carries the cartridge image.
 pub const CART_KIND: &str = "sm83.cart";
@@ -30,9 +39,15 @@ pub const NES_CART_KINDS: &[&str] = &["rp2A03.cart", "rp2A07.cart", "mos6502.car
 /// The Atari family cartridge kinds.
 pub const ATARI_CART_KINDS: &[&str] = &["atari.cart2600", "atari.cart5200", "atari.cart7800"];
 
+/// The SNES family cartridge kinds.
+pub const SNES_CART_KINDS: &[&str] = &["snes.cart"];
+
 /// True for a device kind that carries the cartridge image.
 pub fn is_cart_kind(kind: &str) -> bool {
-    kind == CART_KIND || NES_CART_KINDS.contains(&kind) || ATARI_CART_KINDS.contains(&kind)
+    kind == CART_KIND
+        || NES_CART_KINDS.contains(&kind)
+        || ATARI_CART_KINDS.contains(&kind)
+        || SNES_CART_KINDS.contains(&kind)
 }
 
 /// The NES cartridge and pixel-processing-unit coupling: the mirror
@@ -116,6 +131,16 @@ pub fn demu_ctors() -> DeviceCtors {
     ctors.register("a2.video", Box::new(new_a2_video));
     ctors.register("a2.io", Box::new(new_a2_io));
     ctors.register("a2.disk2", Box::new(new_a2_disk2));
+    ctors.register("wdc65c816.cpu", Box::new(new_wdc_cpu));
+    ctors.register("snes.ppu", Box::new(new_snes_ppu));
+    ctors.register("snes.sys", Box::new(new_snes_sys));
+    ctors.register("snes.wram", Box::new(new_snes_wram));
+    ctors.register("snes.pad", Box::new(new_snes_pad));
+    ctors.register("snes.cart", Box::new(new_snes_cart));
+    ctors.register("apu.core", Box::new(new_snes_apu));
+    ctors.register("iigs.doc", Box::new(new_iigs_doc));
+    ctors.register("iigs.mega2", Box::new(new_iigs_mega2));
+    ctors.register("iigs.iwm", Box::new(new_iigs_iwm));
     ctors
 }
 
@@ -388,4 +413,78 @@ fn new_atari_cart7800(
     _config: &demu_config::model::SystemConfig,
 ) -> Result<Box<dyn Device>, MachineError> {
     Ok(Box::new(demu_dev_cartridge::Atari7800Cart::new(device)))
+}
+
+// The 65C816 device families: the SNES and the Apple IIgs.
+
+fn new_wdc_cpu(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(WdcCpuDevice::Wdc65c816(Wdc65c816::new(
+        device, config,
+    ))))
+}
+
+fn new_snes_ppu(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(SnesPpu::new(device)))
+}
+
+fn new_snes_sys(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(SnesSys::new(device)))
+}
+
+fn new_snes_wram(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(demu_dev_memory::SnesWram::new(device)))
+}
+
+fn new_snes_pad(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(SnesPad::new(device)))
+}
+
+fn new_snes_cart(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(SnesCart::new(device)))
+}
+
+fn new_snes_apu(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(SnesApu::new(device, config)))
+}
+
+fn new_iigs_doc(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(IigsDoc::new(device)))
+}
+
+fn new_iigs_mega2(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Mega2::new(device)))
+}
+
+fn new_iigs_iwm(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Iwm::new(device)))
 }

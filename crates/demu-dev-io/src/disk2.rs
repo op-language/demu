@@ -13,6 +13,8 @@
 //! arm one half track, with the four phases at one quarter turn. The
 //! arm carries up to 69 half tracks of the 35-track form. Each drive
 //! latches its own arm position, and only the selected drive steps.
+//! The drive core is the shared one of the `drive` module that the
+//! IIgs IWM also uses.
 //!
 //! The media model simplifies the real controller: the device reads
 //! its image as a raw byte stream without GCR sector framing. Each
@@ -28,41 +30,7 @@ use demu_core::frequency::{Address, Tick};
 use demu_core::signal::Level;
 use demu_core::{Device, Snapshot, SnapshotError};
 
-/// The bytes one drive image carries per track.
-const TRACK_SPAN: usize = 256;
-
-/// The track count of the 5.25-inch form.
-const TRACKS: usize = 35;
-
-/// The half-track count of the arm: 35 tracks at half steps.
-const HALF_TRACKS: u8 = 69;
-
-/// One drive of the controller: the arm state and the media.
-#[derive(Debug)]
-struct Drive {
-    /// The arm position in half tracks, 0 through 68.
-    half_track: u8,
-    /// The head byte position inside the track.
-    head: usize,
-    /// The write-protect tab of the inserted disk.
-    protected: bool,
-    /// The raw media image, `TRACKS` by `TRACK_SPAN` when present.
-    image: Option<Vec<u8>>,
-    /// The data latch of the last read or write.
-    latch: u8,
-}
-
-impl Drive {
-    fn new() -> Self {
-        Self {
-            half_track: 0,
-            head: 0,
-            protected: false,
-            image: None,
-            latch: 0,
-        }
-    }
-}
+use crate::drive::{Drive, load_boot_image, pulse_phase};
 
 /// The Disk II controller in its slot window.
 #[derive(Debug)]
@@ -112,26 +80,11 @@ impl Disk2 {
         }
     }
 
-    /// Pulse one stepper phase. A pulse of the phase next in the
-    /// phase cycle advances the arm one half track, a pulse of the
-    /// phase before the last pulsed one rewinds it, and a repeated
-    /// pulse of one phase does nothing.
-    fn pulse_phase(&mut self, phase: usize) {
-        let delta: i16 = if phase == (self.last_phase + 1) & 0x03 {
-            1
-        } else if phase == (self.last_phase + 3) & 0x03 {
-            -1
-        } else {
-            0
-        };
-        self.last_phase = phase;
-        if delta == 0 {
-            return;
-        }
-        let drive = self.drive();
-        let moved = i16::from(drive.half_track) + delta;
-        drive.half_track = moved.clamp(0, i16::from(HALF_TRACKS)) as u8;
-        drive.head = usize::from(drive.half_track / 2) * TRACK_SPAN;
+    /// Pulse one stepper phase through the shared drive core.
+    fn pulse(&mut self, phase: usize) {
+        let mut last = self.last_phase;
+        pulse_phase(self.drive(), phase, &mut last);
+        self.last_phase = last;
     }
 
     /// The address decode of one access.
@@ -139,7 +92,7 @@ impl Disk2 {
         let reg = (address & 0x0F) as usize;
         match (reg, value) {
             (0..=3, _) => {
-                self.pulse_phase(reg);
+                self.pulse(reg);
                 0
             }
             (8, _) => {
@@ -165,9 +118,7 @@ impl Disk2 {
             (0x0C, None) => {
                 let drive = self.drive();
                 if let Some(image) = &drive.image {
-                    let idx = (usize::from(drive.half_track / 2) * TRACK_SPAN
-                        + drive.head % TRACK_SPAN)
-                        .min(image.len().saturating_sub(1));
+                    let idx = drive.slot().min(image.len().saturating_sub(1));
                     drive.latch = image[idx];
                 }
                 if self.motor_on {
@@ -252,7 +203,7 @@ impl Device for Disk2 {
         // The boot image loads itself into drive one, trimmed to the
         // standard media size; the second drive stays empty until an
         // external command changes it.
-        self.drives[0].image = Some(bytes[..bytes.len().min(TRACKS * TRACK_SPAN)].to_vec());
+        load_boot_image(&mut self.drives[0], bytes);
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -332,6 +283,7 @@ impl Device for Disk2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drive::{TRACK_SPAN, TRACKS};
     use demu_config::newtypes::{DeviceName, KindName};
 
     fn device() -> demu_config::model::DeviceInstance {
@@ -351,14 +303,14 @@ mod tests {
     #[test]
     fn stepper_walks_half_tracks() {
         let mut d = disk();
-        d.pulse_phase(0);
-        d.pulse_phase(1);
+        d.pulse(0);
+        d.pulse(1);
         assert_eq!(d.drives[0].half_track, 1, "one half track forward");
-        d.pulse_phase(2);
+        d.pulse(2);
         assert_eq!(d.drives[0].half_track, 2);
-        d.pulse_phase(1);
+        d.pulse(1);
         assert_eq!(d.drives[0].half_track, 1, "the rewind pulse steps back");
-        d.pulse_phase(1);
+        d.pulse(1);
         assert_eq!(d.drives[0].half_track, 1, "the same phase pulses nothing");
     }
 
@@ -409,7 +361,7 @@ mod tests {
     fn snapshot_round_trip() {
         let mut d = disk();
         d.motor_on = true;
-        d.pulse_phase(1);
+        d.pulse(1);
         d.drives[1].protected = true;
         d.write(AccessWidth::Byte, Address(0xC0ED), 0x3C, Tick(0));
         let snap = d.snapshot();

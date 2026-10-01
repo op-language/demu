@@ -1532,3 +1532,279 @@ pub mod computer_machine_tests {
         assert_eq!(a, b, "the restored twin composes the same frame");
     }
 }
+
+#[cfg(test)]
+pub mod snes_machine_tests {
+    use crate::assemble;
+    use demu_core::Tick;
+    use demu_core::machine::Machine;
+
+    /// Assemble and boot one machine from a bundled triple, with the
+    /// test cart image as the positional form.
+    fn machine_for(triple: &str, rom: Option<&[u8]>) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let mut machine = Machine::assemble(config, &assemble::demu_ctors()).expect("assemble");
+        if let Some(bytes) = rom {
+            machine
+                .override_boot(
+                    "cart",
+                    demu_config::model::BootState::Hex {
+                        bytes: bytes.to_vec(),
+                    },
+                )
+                .expect("boot");
+        }
+        machine.boot();
+        machine
+    }
+
+    /// A LoROM test cart: the PPU setup, the audio-port walk, and one
+    /// DMA burst that fills VRAM, then a park loop.
+    fn test_cart() -> Vec<u8> {
+        let mut rom = vec![0u8; 0x8000];
+        // The reset vector points at $8000.
+        rom[0x7FFC] = 0x00;
+        rom[0x7FFD] = 0x80;
+        // The 65C816 program.
+        let code: [u8; 79] = [
+            0x18, // CLC
+            0xFB, // XCE: native mode, eight-bit registers
+            0xE2, 0x30, // SEP #$30
+            0x9C, 0x00, 0x21, // STZ $2100: the frame blank
+            0xA9, 0x0F, // LDA #$0F
+            0x8D, 0x00, 0x21, // STA $2100: on
+            0xA9, 0x34, // LDA #$34
+            0x8D, 0x40, 0x21, // STA $2140: the CPU writes port zero
+            0xAD, 0x40, 0x21, // LDA $2140: the plain-latch readback
+            0x8F, 0x00, 0x00, 0x7E, // STA $7E0000: the copy to WRAM
+            0xC2, 0x20, // REP #$20: sixteen-bit A
+            0xA9, 0x34, 0x11, // LDA #$1134: the two source bytes
+            0x8F, 0x00, 0x10, 0x7E, // STA $7E1000: the source word
+            0xA9, 0x00, 0x10, // LDA #$1000
+            0x8D, 0x02, 0x43, // STA $4302: the A-bus source word
+            0xE2, 0x20, // SEP #$20
+            0xA9, 0x7E, // LDA #$7E
+            0x8D, 0x04, 0x43, // STA $4304: the source bank
+            0xC2, 0x20, // REP #$20
+            0xA9, 0x02, 0x00, // LDA #$0002: two source bytes
+            0x8D, 0x05, 0x43, // STA $4305: the byte count
+            0xE2, 0x20, // SEP #$20
+            0xA9, 0x01, // LDA #$01
+            0x8D, 0x00, 0x43, // STA $4300: the mode-one pair form
+            0xA9, 0x18, // LDA #$18
+            0x8D, 0x01, 0x43, // STA $4301: the destination $2118
+            0xA9, 0x80, // LDA #$80
+            0x8D, 0x15, 0x21, // STA $2115: the address increments at $2119
+            0xA9, 0x01, // LDA #$01
+            0x8D, 0x0B, 0x42, // STA $420B: one burst of channel zero
+            0x4C, 0x4C, 0x80, // JMP $804C: the park loop
+        ];
+        rom[..code.len()].copy_from_slice(&code);
+        rom
+    }
+
+    fn cpu_pc(machine: &Machine) -> Option<u64> {
+        machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .and_then(|c| c.registers().get("PC").copied())
+    }
+
+    #[test]
+    fn snes_config_boots_two_domains() {
+        let machine = machine_for("wdc65c816-nintendo-snes", None);
+        assert_eq!(machine.config.clocks.len(), 2, "the two crystals");
+        assert_eq!(machine.config.devices.len(), 7);
+    }
+
+    #[test]
+    fn snes_reads_the_vector_and_walks_the_program() {
+        let mut machine = machine_for("wdc65c816-nintendo-snes", Some(&test_cart()));
+        machine.run_until(Tick(2_000_000));
+        let pc = cpu_pc(&machine).expect("cpu");
+        assert!(
+            pc == 0x804C,
+            "the core parks at the program end: pc={pc:#06x}"
+        );
+    }
+
+    #[test]
+    fn snes_dma_burst_fills_vram_and_the_channel_clears() {
+        use demu_core::frequency::Address;
+        let mut machine = machine_for("wdc65c816-nintendo-snes", Some(&test_cart()));
+        machine.run_until(Tick(2_000_000));
+        // The DMA's source bytes land in VRAM through the $2118/$2119
+        // register pair.
+        let vram = machine
+            .device_by_name("ppu")
+            .and_then(|d| d.video())
+            .and_then(|v| v.dump_layer(demu_core::device::VideoLayer::Vram))
+            .expect("vram");
+        assert_eq!(&vram[..2], &[0x34, 0x11], "the burst copied the pair");
+        // The burst enable cleared itself.
+        assert_eq!(machine.peek("cpu", Address(0x420B)), 0);
+        // The work RAM carries the port readback and the source bytes.
+        assert_eq!(machine.peek("cpu", Address(0x7E_0000)), 0x00);
+        assert_eq!(machine.peek("cpu", Address(0x7E_1000)), 0x34);
+        assert_eq!(machine.peek("cpu", Address(0x7E_1001)), 0x11);
+    }
+
+    #[test]
+    fn snes_sound_domain_free_runs_deterministically() {
+        let cart = test_cart();
+        let mut machine = machine_for("wdc65c816-nintendo-snes", Some(&cart));
+        let mut twin = machine_for("wdc65c816-nintendo-snes", Some(&cart));
+        machine.run_until(Tick(3_000_000));
+        twin.run_until(Tick(3_000_000));
+        let mut state = Vec::new();
+        machine.save(&mut state).expect("save");
+        let mut twin_state = Vec::new();
+        twin.save(&mut twin_state).expect("save");
+        assert_eq!(
+            state, twin_state,
+            "the async domains produce identical state"
+        );
+    }
+
+    #[test]
+    fn snes_save_and_restore_reproduces_state() {
+        let cart = test_cart();
+        let mut machine = machine_for("wdc65c816-nintendo-snes", Some(&cart));
+        machine.run_until(Tick(2_500_000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+
+        let mut restored = machine_for("wdc65c816-nintendo-snes", Some(&cart));
+        restored.load(&buf).expect("load");
+        let mut buf2 = Vec::new();
+        restored.save(&mut buf2).expect("save");
+        assert_eq!(buf, buf2, "save after restore is byte-identical");
+        assert_eq!(restored.now(), machine.now());
+
+        // Two machines restored from the same save continue
+        // identically: device state, both domain queues, and later
+        // saves stay byte-equal. (A machine that runs on without a
+        // restore is not a comparable twin: re-entered runs re-seed
+        // its queue from each device's cached next event.)
+        let mut twin = machine_for("wdc65c816-nintendo-snes", Some(&cart));
+        twin.load(&buf).expect("load twin");
+        restored.run_until(Tick(4_000_000));
+        twin.run_until(Tick(4_000_000));
+        let mut check = Vec::new();
+        restored.save(&mut check).expect("save");
+        let mut check2 = Vec::new();
+        twin.save(&mut check2).expect("save");
+        assert_eq!(check, check2, "the two restores continue identically");
+    }
+}
+
+#[cfg(test)]
+pub mod iigs_machine_tests {
+    use crate::assemble;
+    use demu_core::Tick;
+    use demu_core::machine::Machine;
+
+    /// Assemble and boot one machine from a bundled triple, with the
+    /// test monitor image as the ROM boot state.
+    fn machine_for(triple: &str, rom: Option<&[u8]>) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let mut machine = Machine::assemble(config, &assemble::demu_ctors()).expect("assemble");
+        if let Some(bytes) = rom {
+            machine
+                .override_boot(
+                    "rom",
+                    demu_config::model::BootState::Hex {
+                        bytes: bytes.to_vec(),
+                    },
+                )
+                .expect("boot");
+        }
+        machine.boot();
+        machine
+    }
+
+    /// The synthetic boot monitor: the reset code enters native mode,
+    /// copies the ROM banner into the text page, walks the console
+    /// switches, and parks in an idle branch.
+    fn monitor_image() -> Vec<u8> {
+        let mut rom = vec![0u8; 0x1000];
+        // The banner at $FF20 in the high-ASCII text form.
+        rom[0x0F20..0x0F28].copy_from_slice(&[0xC1, 0xD0, 0xD0, 0xCC, 0xC5, 0xA0, 0xC9, 0xC9]);
+        // The program at $FFD0.
+        let code: [u8; 29] = [
+            0x18, // CLC
+            0xFB, // XCE: native mode
+            0xE2, 0x30, // SEP #$30
+            0xA2, 0x00, // LDX #$00
+            0xBD, 0x20, 0xFF, // LDA $FF20,X
+            0xF0, 0x06, // BEQ $FFE1: the switch walk
+            0x9D, 0x00, 0x04, // STA $0400,X
+            0xE8, // INX
+            0x80, 0xF5, // BRA $FFD6
+            0xA9, 0x80, // LDA #$80
+            0x8D, 0x29, 0xC0, // STA $C029: the new-video register
+            0xA9, 0x3C, // LDA #$3C
+            0x8D, 0x35, 0xC0, // STA $C035: the shadow inhibit byte
+            0x80, 0xFE, // the park at $FFEB: BRA self
+        ];
+        rom[0x0FD0..0x0FED].copy_from_slice(&code);
+        // The reset vector picks $FFD0.
+        rom[0x0FFC] = 0xD0;
+        rom[0x0FFD] = 0xFF;
+        rom
+    }
+
+    fn cpu_pc(machine: &Machine) -> Option<u64> {
+        machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .and_then(|c| c.registers().get("PC").copied())
+    }
+
+    #[test]
+    fn iigs_config_boots_one_domain() {
+        let machine = machine_for("wdc65c816-apple-iigs", None);
+        assert_eq!(machine.config.clocks.len(), 1);
+        assert_eq!(machine.config.devices.len(), 7);
+    }
+
+    #[test]
+    fn iigs_boots_and_walks_the_console_switches() {
+        use demu_core::frequency::Address;
+        let mut machine = machine_for("wdc65c816-apple-iigs", Some(&monitor_image()));
+        machine.run_until(Tick(500_000));
+        // The banner landed in the text page.
+        for (i, wanted) in [0xC1, 0xD0, 0xD0, 0xCC, 0xC5, 0xA0, 0xC9, 0xC9]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                machine.peek("cpu", Address(0x0400 + i as u32)),
+                wanted,
+                "text page byte {i}"
+            );
+        }
+        // The switch walk left its registers.
+        assert_eq!(machine.peek("cpu", Address(0x00C029)), 0x80);
+        assert_eq!(machine.peek("cpu", Address(0x00C035)), 0x3C);
+        // The core sits in the park branch.
+        let pc = cpu_pc(&machine).expect("cpu");
+        assert!(pc == 0xFFEB, "the monitor parks at $FFEB: pc={pc:#06x}");
+    }
+
+    #[test]
+    fn iigs_runs_deterministically() {
+        let monitor = monitor_image();
+        let mut machine = machine_for("wdc65c816-apple-iigs", Some(&monitor));
+        let mut twin = machine_for("wdc65c816-apple-iigs", Some(&monitor));
+        machine.run_until(Tick(500_000));
+        twin.run_until(Tick(500_000));
+        let mut state = Vec::new();
+        machine.save(&mut state).expect("save");
+        let mut twin_state = Vec::new();
+        twin.save(&mut twin_state).expect("save");
+        assert_eq!(state, twin_state, "the runs produce identical state");
+    }
+}

@@ -1,0 +1,182 @@
+# Apple IIgs, the canonical system configuration.
+#
+# One clock domain at the 28636360 Hz master crystal. The 65C816 runs
+# at one tenth, the Apple video generator at one fourth (the classic
+# 7.159090 MHz video clock), and the Ensoniq DOC at one fourteenth per
+# the sound GLU's divider form. The machine boots from its monitor
+# ROM at bank $00 $F000-$FFFF and walks the console switches; the RAM
+# banks one to three answer plainly.
+#
+# This build keeps the boot view of the ROM mapped and the extended
+# ROM banks unmodeled; the language-card and auxiliary banking reduce
+# to the switch and register state that the Mega II stores.
+
+[system]
+name = "Apple IIgs"
+triple = "wdc65c816-apple-iigs"
+description = "The Apple IIgs: the Mega II glue, the IWM disk port, and the Ensoniq DOC on the 65C816."
+
+[clock.main]
+frequency = "28636360"
+origin = "the IIgs master crystal; the CPU at /10, the video at /4, and the DOC at /14"
+
+[[device]]
+name = "cpu0"
+kind = "wdc65c816.cpu"
+domain = "main"
+[device.dividers]
+cpu = 10
+
+[[device]]
+name = "mega2"
+kind = "iigs.mega2"
+domain = "main"
+[device.dividers]
+cpu = 10
+
+[[device]]
+name = "video"
+kind = "a2.video"
+domain = "main"
+[device.dividers]
+dot = 4
+
+[[device]]
+name = "doc"
+kind = "iigs.doc"
+domain = "main"
+[device.dividers]
+cpu = 14
+
+[[device]]
+name = "iwm"
+kind = "iigs.iwm"
+domain = "main"
+
+[[device]]
+name = "sram"
+kind = "atari.ram"
+domain = "main"
+[device.params]
+size = 0x040000
+
+[[device]]
+name = "rom"
+kind = "atari.rom"
+domain = "main"
+[device.params]
+size = 0x001000
+readonly = true
+
+[[bus]]
+name = "cpu"
+address_bits = 24
+owner = "cpu0"
+
+# Bank $00: the RAM slices leave the display pages and the console
+# page to their owners, and the ROM answers the boot view at $F000.
+[[window]]
+name = "w_ram0"
+bus = "cpu"
+device = "sram"
+base = "0x000000"
+size = "0x000400"
+overlay = "boot"
+
+[[window]]
+name = "w_text"
+bus = "cpu"
+device = "video"
+base = "0x000400"
+size = "0x000800"
+
+[[window]]
+name = "w_ram1"
+bus = "cpu"
+device = "sram"
+base = "0x000C00"
+size = "0x001400"
+
+[[window]]
+name = "w_hires"
+bus = "cpu"
+device = "video"
+base = "0x002000"
+size = "0x004000"
+
+[[window]]
+name = "w_ram2"
+bus = "cpu"
+device = "sram"
+base = "0x006000"
+size = "0x006000"
+
+[[window]]
+name = "w_ram3"
+bus = "cpu"
+device = "sram"
+base = "0x00F000"
+size = "0x001000"
+overlay = "boot"
+
+[[window]]
+name = "w_rom_boot"
+bus = "cpu"
+device = "rom"
+base = "0x00F000"
+size = "0x001000"
+overlay = "boot"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+# Banks $01-$03 carry the rest of the 256 KiB.
+[[window]]
+name = "w_ram_banks"
+bus = "cpu"
+device = "sram"
+base = "0x010000"
+size = "0x030000"
+
+# The console page: the Mega II answers it, the DOC's sound GLU
+# slice overlays at $C03C, and the IWM's disk port overlays at $C0E0.
+[[window]]
+name = "w_console"
+bus = "cpu"
+device = "mega2"
+base = "0x00C000"
+size = "0x0100"
+overlay = "console"
+
+[[window]]
+name = "w_sound_glu"
+bus = "cpu"
+device = "doc"
+base = "0x00C03C"
+size = "0x0004"
+overlay = "console"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_iwm"
+bus = "cpu"
+device = "iwm"
+base = "0x00C0E0"
+size = "0x0010"
+overlay = "console"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+# The Mega II drives the CPU IRQ line when its armed flags say so.
+[[connection]]
+from = "mega2.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+# The monitor ROM boots the machine; its canonical asset carries the
+# power-on sequence.
+[boot.rom]
+rom = "applegiigs-monitor.rom"
+
+[boot.sram]
+pattern = "zero"

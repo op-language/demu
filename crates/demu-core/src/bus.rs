@@ -107,22 +107,14 @@ impl Bus {
     ///
     /// The caller applies overlay priorities and conflict policies to the
     /// list of hits. Mirrors translate into the primary range before the
-    /// call site sees the address.
+    /// call site sees the address; the translate form lives in
+    /// [`crate::device::window_offset_of`], the one anchor
+    /// implementation.
     pub fn hits(&self, address: u32) -> Vec<(usize, u32)> {
         let mut out = Vec::new();
         for (i, w) in self.windows.iter().enumerate() {
-            if address >= w.base && address < w.base.saturating_add(w.size) {
-                out.push((i, address - w.base));
-            } else if let Some(m) = w.mirror {
-                let stride = u64::from(m.stride);
-                let primary_end = u64::from(w.base + w.size - 1);
-                let addr = u64::from(address);
-                if addr > primary_end && stride > 0 {
-                    let offset = addr - primary_end - 1;
-                    if offset % stride < u64::from(w.size) && offset / stride < u64::from(m.count) {
-                        out.push((i, (offset % u64::from(w.size)) as u32));
-                    }
-                }
+            if let Some(off) = crate::device::window_offset_of(w, address) {
+                out.push((i, off));
             }
         }
         out
@@ -172,6 +164,26 @@ mod tests {
         assert_eq!(hits, vec![(0, 0x0034)]);
         // The four repeats cover 0x0800 through 0x27FF; 0x2800 is outside.
         assert!(bus.hits(0x2800).is_empty());
+    }
+
+    #[test]
+    fn sparse_mirror_repeats_on_the_stride_boundary() {
+        let mut bus = Bus::new("bus", 24);
+        let mut w = window("mem", 0, 0x000000, 0x002000);
+        w.mirror = Some(Mirror {
+            stride: 0x010000,
+            count: 3,
+        });
+        bus.add_window(w);
+
+        // Repeat k=1 covers 0x010000-0x011FFF; 0x010034 maps to 0x34.
+        assert_eq!(bus.hits(0x010034), vec![(0, 0x0034)]);
+        // The gap between the repeats answers nothing: the register
+        // page above the first 8 KiB stays free.
+        assert!(bus.hits(0x002140).is_empty());
+        // Repeat k=3 covers 0x030000-0x031FFF; k=4 is out of the count.
+        assert_eq!(bus.hits(0x030000), vec![(0, 0x0000)]);
+        assert!(bus.hits(0x040000).is_empty());
     }
 
     #[test]

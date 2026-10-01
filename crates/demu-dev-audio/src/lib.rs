@@ -1,16 +1,23 @@
-//! The SM83 audio device.
+//! The audio device family: the SM83 APU, the NES APU, the Atari
+//! POKEY, the C64 SID, the SNES S-SMP sound die with its S-DSP
+//! engine, and the Apple IIgs Ensoniq DOC.
 //!
-//! Four channels: two pulse channels with sweep and envelope, a wave
-//! channel with its own sample memory, and a noise channel. The frame
-//! sequencer rides the DIV-APU edge 512 times a second and clocks the
-//! length counters, the envelopes, and the channel-1 sweep. Each channel
-//! timer counts at the CPU's T-cycle rate, and the mixed output lands
-//! in a sample buffer for the media pipeline.
+//! The SM83 four channels: two pulse channels with sweep and envelope,
+//! a wave channel with its own sample memory, and a noise channel. The
+//! frame sequencer rides the DIV-APU edge 512 times a second and
+//! clocks the length counters, the envelopes, and the channel-1 sweep.
+//! Each channel timer counts at the CPU's T-cycle rate, and the mixed
+//! output lands in a sample buffer for the media pipeline.
 
+pub mod apu;
+pub mod dsp;
+pub mod iigsdoc;
 pub mod nes;
 pub mod pokey;
 pub mod sid;
 
+pub use dsp::Sdsp;
+pub use iigsdoc::IigsDoc;
 pub use nes::NesApu;
 pub use pokey::Pokey;
 pub use sid::Sid;

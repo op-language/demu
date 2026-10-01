@@ -1,4 +1,5 @@
-//! The SM83 DMA devices: the OAM DMA unit and the CGB VRAM DMA unit.
+//! The DMA device family: the SM83 OAM DMA unit and CGB VRAM DMA
+//! unit, the NES OAM DMA unit, and the SNES 5A22 support die.
 //!
 //! The OAM DMA unit copies 160 bytes from any bus source into object
 //! memory at one byte per M-cycle. The CGB VRAM DMA unit moves 16-byte
@@ -7,8 +8,10 @@
 //! stamp every read and write with its exact tick.
 
 pub mod nes;
+pub mod snessys;
 
 pub use nes::NesOamDma;
+pub use snessys::SnesSys;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};

@@ -246,23 +246,30 @@ impl Window {
     }
 
     /// Translate an address inside a mirror to the primary range.
+    ///
+    /// A mirror repeat `k` (1 through `count`) sits at
+    /// `base + k*stride` and carries the first `size` bytes of that
+    /// stride period; the primary range itself is repeat 0. The
+    /// repeat lands on the stride boundary so bank layouts repeat on
+    /// their period, not flush after the primary range.
     pub fn mirror_hit(&self, address: u32) -> bool {
-        match self.mirror {
-            Some(m) => {
-                let stride = u64::from(m.stride);
-                let primary_end = u64::from(self.end());
-                let addr = u64::from(address);
-                if addr > primary_end {
-                    let offset = addr - primary_end - 1;
-                    stride > 0
-                        && offset % stride < u64::from(self.size)
-                        && offset / stride < u64::from(m.count)
-                } else {
-                    false
-                }
-            }
-            None => false,
+        let Some(m) = self.mirror else {
+            return false;
+        };
+        let stride = u64::from(m.stride);
+        if stride == 0 {
+            return false;
         }
+        let base = u64::from(self.base);
+        let addr = u64::from(address);
+        let primary_end = base + u64::from(self.size);
+        if addr < primary_end {
+            return false;
+        }
+        let rel = addr - base;
+        let k = rel / stride;
+        let off = rel % stride;
+        k >= 1 && k <= u64::from(m.count) && off < u64::from(self.size)
     }
 }
 
@@ -589,20 +596,67 @@ impl<'a> MachineCtx<'a> {
 
 /// The offset of `address` inside the window's primary range or a
 /// mirror, or `None` when the window does not cover the address.
+///
+/// A mirror repeat `k` (1 through `count`) sits at
+/// `base + k*stride` and carries the first `size` bytes of the period,
+/// so the primary range is repeat 0 and later repeats land on their
+/// stride boundary.
 pub fn window_offset_of(w: &crate::bus::BusWindow, address: u32) -> Option<u32> {
     if address >= w.base && address < w.base.saturating_add(w.size) {
         return Some(address - w.base);
     }
-    if let Some(m) = w.mirror {
-        let stride = u64::from(m.stride);
-        let primary_end = u64::from(w.base + w.size - 1);
-        let addr = u64::from(address);
-        if addr > primary_end && stride > 0 {
-            let offset = addr - primary_end - 1;
-            if offset % stride < u64::from(w.size) && offset / stride < u64::from(m.count) {
-                return Some((offset % u64::from(w.size)) as u32);
-            }
-        }
+    let m = w.mirror?;
+    let stride = u64::from(m.stride);
+    if stride == 0 {
+        return None;
     }
-    None
+    let base = u64::from(w.base);
+    let addr = u64::from(address);
+    let primary_end = base + u64::from(w.size);
+    if addr < primary_end {
+        return None;
+    }
+    let rel = addr - base;
+    let k = rel / stride;
+    let off = rel % stride;
+    if k >= 1 && k <= u64::from(m.count) && off < u64::from(w.size) {
+        Some(off as u32)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod window_offset_tests {
+    use super::window_offset_of;
+
+    #[test]
+    fn sparse_mirror_repeats_on_the_stride_boundary() {
+        let mut w = crate::bus::BusWindow {
+            name: "mem".to_string(),
+            device: 0,
+            base: 0x0000,
+            size: 0x002000,
+            mirror: Some(crate::bus::Mirror {
+                stride: 0x010000,
+                count: 63,
+            }),
+            overlay: None,
+            conflict: crate::bus::ConflictPolicy::First,
+        };
+        // The primary range answers.
+        assert_eq!(window_offset_of(&w, 0x0140), Some(0x0140));
+        // The gap after the primary answers nothing: the register
+        // page at $2140 stays free for another window.
+        assert_eq!(window_offset_of(&w, 0x2140), None);
+        // Repeat k=1 covers 0x010000-0x011FFF and maps into the
+        // primary offset.
+        assert_eq!(window_offset_of(&w, 0x010034), Some(0x0034));
+        // Past the count the repeats stop.
+        w.mirror = w.mirror.map(|m| crate::bus::Mirror {
+            stride: m.stride,
+            count: 1,
+        });
+        assert_eq!(window_offset_of(&w, 0x020000), None);
+    }
 }

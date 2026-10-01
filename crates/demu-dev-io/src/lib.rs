@@ -1,28 +1,37 @@
-//! The SM83 IO devices: the timer, the joypad, and the catch-all
-//! register block for the undocumented registers.
+//! The IO device family: the SM83 timer, joypad, and catch-all
+//! register block, the NES and Atari controller and support devices,
+//! the Apple II keyboard and switch block, the Disk II drive, the
+//! CIA and PIA support chips, and the SNES controller port.
 //!
-//! The timer runs on a free-running system counter that increments once
-//! per T-cycle. The timer register `DIV` is the counter's bits 7 to 14,
-//! the `TIMA` source is a falling edge of the selected system-counter
-//! bit, and the audio frame sequencer rides a falling edge 512 times a
-//! second. Writes to `DIV` and `TAC` reproduce the falling-edge glitches
-//! of the real circuit by scheduling an immediate visit, and the
-//! delivered edges reach the CPU and the audio device over the declared
-//! connections.
+//! The SM83 timer runs on a free-running system counter that
+//! increments once per T-cycle. The timer register `DIV` is the
+//! counter's bits 7 to 14, the `TIMA` source is a falling edge of the
+//! selected system-counter bit, and the audio frame sequencer rides a
+//! falling edge 512 times a second. Writes to `DIV` and `TAC`
+//! reproduce the falling-edge glitches of the real circuit by
+//! scheduling an immediate visit, and the delivered edges reach the
+//! CPU and the audio device over the declared connections.
 
 pub mod apple;
 pub mod cia;
 pub mod disk2;
+mod drive;
+pub mod iwm;
+pub mod mega2;
 pub mod nes;
 pub mod pia;
 pub mod riot;
+pub mod snespad;
 
 pub use apple::AppleIo;
 pub use cia::Cia;
 pub use disk2::Disk2;
+pub use iwm::Iwm;
+pub use mega2::Mega2;
 pub use nes::Controller;
 pub use pia::Pia;
 pub use riot::Riot;
+pub use snespad::SnesPad;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};

@@ -216,6 +216,31 @@ pub fn core_registry() -> &'static KindRegistry {
         ] {
             r.register(KindInfo::new(kind, DomainRequirement::Required, &[]));
         }
+        // The 65C816 machine families: the SNES and the Apple IIgs.
+        // The SNES audio die carries the port-race quirk; the SPC
+        // and DSP form one device on the sound domain.
+        r.register(KindInfo::new(
+            "wdc65c816.cpu",
+            DomainRequirement::Required,
+            &[],
+        ));
+        for kind in [
+            "snes.ppu",
+            "snes.sys",
+            "snes.wram",
+            "snes.pad",
+            "snes.cart",
+            "iigs.doc",
+            "iigs.mega2",
+            "iigs.iwm",
+        ] {
+            r.register(KindInfo::new(kind, DomainRequirement::Required, &[]));
+        }
+        r.register(KindInfo::new(
+            "apu.core",
+            DomainRequirement::Required,
+            &["port_race_or"],
+        ));
         r
     })
 }
