@@ -70,6 +70,12 @@ pub const SNES: &str = include_str!("../../../configs/wdc65c816-nintendo-snes.to
 /// The Apple IIgs.
 pub const APPLE_IIGS: &str = include_str!("../../../configs/wdc65c816-apple-iigs.toml");
 
+/// The Atari Lynx.
+pub const LYNX: &str = include_str!("../../../configs/vl65nc02-atari-lynx.toml");
+
+/// The PC Engine.
+pub const PCENGINE: &str = include_str!("../../../configs/mos6502-nec-pcengine.toml");
+
 /// A bundled config source: the triple name and the embedded text.
 pub struct BundledConfig {
     /// The triple name that selects this config.
@@ -159,6 +165,14 @@ pub const BUNDLED: &[BundledConfig] = &[
     BundledConfig {
         triple: "wdc65c816-apple-iigs",
         text: APPLE_IIGS,
+    },
+    BundledConfig {
+        triple: "vl65nc02-atari-lynx",
+        text: LYNX,
+    },
+    BundledConfig {
+        triple: "mos6502-nec-pcengine",
+        text: PCENGINE,
     },
 ];
 

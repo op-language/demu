@@ -35,7 +35,9 @@ version = "0.1.0"
 dependencies = [
  "demu-config",
  "demu-core",
+ "demu-cpu-huc6280",
  "demu-cpu-mos6502",
+ "demu-cpu-mos65sc02",
  "demu-cpu-sm83",
  "demu-cpu-wdc65c816",
  "demu-dev-audio",
@@ -72,6 +74,10 @@ dependencies = [
 [[package]]
 name = "demu-cpu-huc6280"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+]
 
 [[package]]
 name = "demu-cpu-m68000"
@@ -89,6 +95,10 @@ dependencies = [
 [[package]]
 name = "demu-cpu-mos65sc02"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+]
 
 [[package]]
 name = "demu-cpu-sm83"
@@ -146,6 +156,7 @@ dependencies = [
  "demu-config",
  "demu-core",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

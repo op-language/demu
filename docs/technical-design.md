@@ -820,3 +820,127 @@ assembled machine.
   cross-checks, and the BIOS checksum runs remain pending the
   follow-up evidence pass with real ROM assets, per the precedent the
   SM83 and NES families set.
+
+## 23. As-built notes: Lynx and PC Engine
+
+The 65SC02-derivative and HuC6280 machines complete the 6502-family
+group. Each machine runs one clock domain, so the cross-domain
+machinery of the SNES group sees no new form here; the machines
+instead exercise the die-internal coupling: the map unit, the on-die
+timer, and the register-protocol surfaces.
+
+- One core crate serves two kinds. `mos65sc02.cpu` runs the published
+  CMOS 65C02 instruction form, and `vl65nc02.cpu` is the same core in
+  its Lynx form: the die reads the MAPCTL register at
+  `$FFF9`/`$FFF8` through its own bus at every instruction boundary
+  and drives the `suzy_ram`, `mikey_ram`, `rom_ram`, and `vec_ram`
+  overlay lines from the set bits. A high-speed bit (bit 7) lengthens
+  every cycle by one domain tick. The plain kind keeps the page-bit
+  instructions SMB, RMB, BBS, and BBR, which the Lynx core replaces
+  with two-cycle NOP forms; the quirk flag `bbr_smb` records the
+  chosen flavor per kind. WAI and STP park the core until the IRQ
+  edge or the reset line, and a parked core declares no next event
+  until the line rises; the save and restore tests repeat the park
+  form mid-run.
+- The Lynx Mikey die (`lynx.mikey`) carries the timer block of four
+  bytes per timer with the published expiry form (a timer that starts
+  at N expires after N plus one source periods), the reload and hold
+  rules, the cascade chains 0-2-4 and 1-3, the interrupt set and
+  reset registers, the joypad byte with the published button bits,
+  the switch byte with the slot lines fixed high, the cart strobe and
+  data lines of SYSCTL1 and IODAT, and the AUDIN page select line.
+  The LCD line engine walks 317-dot line periods (a recorded 0.15
+  percent approximation of the published line rate) over 105 line
+  periods per frame, with the display rows at periods 2 through 103.
+  The serial link, the magtape bits, the parallel-port pin
+  semantics, and the direction gating of IODIR store their bytes and
+  stay out of the model; their records name each form.
+- The Lynx Suzy die (`lynx.suzy`) owns the sprite engine with the
+  packed and literal line forms of the control block chain, the quadrant walk
+  with flip and direction bits, the scaling, stretch, and tilt
+  accumulators, the background and collision buffer compose, the
+  collision depository write-back through the machine bus, the math
+  unit (signed multiply and unsigned divide with recorded, not
+  simulated, latency), the four pulse-width audio channels with
+  their polynomial shift registers, integrate mode, link clocks, and
+  the mute byte, and the twelve-bit palette. The walk runs
+  synchronously inside one display-line visit, the build and
+  collision buffers stay internal mirrors, the divide latency is
+  recorded, and the everon bit keeps the Handy polarity; each
+  approximation carries its record in the module documentation.
+- The Lynx cartridge (`lynx.cart`) answers the stream form: a ripple
+  address counter that increments on every read, the block shift
+  register fed by the IODAT data bit and the SYSCTL1 strobe, the
+  RCART0 and RCART1 ports that read the banks at `$FCB2`/`$FCB3`,
+  the `raw` and `LNX` header forms, the bank-1 shadow RAM of the
+  single-bank cards, and the AUDIN 1 MiB carrier form. The BLL
+  header form stays out and is recorded.
+- The Lynx memory devices (`lynx.bootrom`, `lynx.mapctl`) carry the
+  512-byte boot ROM over the vector RAM and the map control
+  register. The bundled config declares no boot ROM bytes: the real
+  512-byte ROM loads through the boot state of the positional flow
+  (`[boot.bootrom]` with a `hex` or a `path` form), and the bundled
+  machine boots with an empty ROM surface until a machine build
+  supplies one. The boot flow test supplies a synthetic boot ROM
+  whose copy loop maps the ROM space to the RAM underneath and parks
+  the core in the copied page, the published boot shape.
+- The HuC6280 core (`huc6280.cpu`) carries the MPR mapping unit with
+  the published reset state, the zero-page, stack, and T-cell rule
+  that routes through MPR 1, the on-die timer at the I/O offsets
+  `$0C00`/`$0C01`/`$0C07` with the recorded `1024/(select+1)`
+  interval form, and the interrupt controller in the published
+  Hudson form: the mask register at `$1402` (a write sets the disable
+  bits and a read returns the mask), the status read at `$1403`, and
+  the timer acknowledge at the write to `$1403`; the pre-2007 MAME
+  forms stay as recorded alias writes at `$1400`/`$1401`. The service
+  priority follows the published form: NMI, then the timer, then
+  IRQ1, then IRQ2. The die intercepts the accesses of the hardware
+  bank `$FF`; every other offset routes through the bus. The reset
+  vector always comes from bank 0, which is why the machine resets
+  out of the card. The one-cycle VDC and VCE window penalty (the
+  MAME form) stays out and the record names it.
+- The PC Engine video pair (`pce.vdc`, `pce.vce`) answers the twenty
+  internal registers of the VDC with the status flags, the SATB
+  transfer at the vertical blank, the raster compose of one line per
+  visit (510 dots at the dot divider, 242 line periods, a 256 by 239
+  frame), and the VCE color table of 512 nine-bit entries. The RCR
+  scanline convention follows the published form: the die's raster
+  counter reads 64 at the last blank line before the display
+  window, so the register carries the target display line plus 64,
+  and the compare fires inside the display window only. The VDC busy
+  status flag reads 0, because the VRAM ports are immediate in this
+  build. The VDC reads the color table bytes
+  through the bus at the `palette_base` parameter, the declared
+  machine coupling; the direct window face at the published
+  `$1FF800` address answers those bytes read-only with their byte
+  index, and the CPU's real path to the palette keeps the register
+  protocol. The VDC's `bus` parameter names the walk bus and
+  defaults to the first configured bus.
+- The PC Engine PSG (`pce.psg`) runs six channels in one device: the
+  32-entry five-bit waveform tables, the DDA direct form with the
+  published circular buffer, the noise form of channels 5 and 6 on an
+  eighteen-bit shift register, the main amplitude pair, and the LFO
+  register pair held as a recorded form. The `sample_rate` surface
+  reports the published internal rate and `take_samples` drains the
+  mono buffer; the same registers produce the same samples.
+- The PC Engine pad (`pce.joypad`) answers the I/O page form: the
+  pad select write whose bit 0 selects the multiplexer row and whose
+  CLR bit stays stored state, the published row readback with the
+  CD bits and the country line (set for the Japan form and clear for
+  the USA form, per the MagicKit hardware text and the Mednafen
+  readback), the idle form of the six-button rows (a recorded
+  approximation), and the turbo autofire on a visit cadence from the
+  rate and enable bytes.
+- The validation of the triple kind rule gained one exception: the
+  `mos6502-nec-pcengine` triple names the 6502 family, but the
+  machine carries the real chip kind `huc6280.cpu`; validation
+  accepts that one pairing and every other triple keeps the strict
+  family rule.
+- Both bundled configs assemble and boot to a parked core: the Lynx
+  test walks the boot ROM copy and map flow on the full published
+  wiring, and the PC Engine test drives the reset vector, the VDC
+  and VCE register surfaces, the direct color-table face, and the
+  pad byte. The real test-ROM suites and the boot-ROM check screen
+  with the actual 512-byte boot ROM remain pending the follow-up
+  evidence pass with real ROM assets, per the precedent every
+  machine family before this one set.

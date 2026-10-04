@@ -241,6 +241,58 @@ pub fn core_registry() -> &'static KindRegistry {
             DomainRequirement::Required,
             &["port_race_or"],
         ));
+        // The 65SC02 machine families: the Lynx and the plain CMOS
+        // core. Each kind gate carries the page-bit flavor quirk.
+        r.register(KindInfo::new(
+            "vl65nc02.cpu",
+            DomainRequirement::Required,
+            &["bbr_smb"],
+        ));
+        r.register(KindInfo::new(
+            "mos65sc02.cpu",
+            DomainRequirement::Required,
+            &["bbr_smb"],
+        ));
+        // The HuC6280 die of the PC Engine: the MMU, the timer, and
+        // the interrupt controller sit on the chip.
+        r.register(KindInfo::new(
+            "huc6280.cpu",
+            DomainRequirement::Required,
+            &[],
+        ));
+        // The Lynx device family around the VTI die: the Suzy sprite
+        // die with the PWM sound, the Mikey die, the map control, the
+        // memory slices, and the stream cartridge.
+        r.register(KindInfo::new("lynx.suzy", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new(
+            "lynx.mikey",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "lynx.mapctl",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new("lynx.ram", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new(
+            "lynx.bootrom",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new("lynx.cart", DomainRequirement::Required, &[]));
+        // The PC Engine family: the VDC and VCE video pair, the PSG,
+        // the controller port, the flat work RAM, and the HuCard.
+        r.register(KindInfo::new("pce.vdc", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("pce.vce", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("pce.psg", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new(
+            "pce.joypad",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new("pce.ram", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("pce.cart", DomainRequirement::Required, &[]));
         r
     })
 }

@@ -1808,3 +1808,697 @@ pub mod iigs_machine_tests {
         assert_eq!(state, twin_state, "the runs produce identical state");
     }
 }
+
+#[cfg(test)]
+pub mod vl65_machine_tests {
+    use crate::assemble;
+    use demu_core::Level;
+    use demu_core::Tick;
+    use demu_core::machine::Machine;
+
+    /// Assemble the mini VTI-die machine: the core, the work RAM, the
+    /// boot ROM, and the map control with the published wiring.
+    fn mini_machine(boot_image: &[u8]) -> Machine {
+        let mut hex = String::new();
+        for b in boot_image {
+            hex.push_str(&format!("{:02x}", b));
+        }
+        let raw = format!(
+            r#"
+            [system]
+            name = "vl65-mini"
+            triple = "test"
+            description = "the mini VTI die machine of the framework tests"
+            [clock.main]
+            frequency = "16000000"
+            [[device]]
+            name = "cpu0"
+            kind = "vl65nc02.cpu"
+            domain = "main"
+            [device.dividers]
+            cpu = 4
+            [[device]]
+            name = "ram0"
+            kind = "lynx.ram"
+            domain = "main"
+            [device.params]
+            size = 65536
+            [[device]]
+            name = "bootrom"
+            kind = "lynx.bootrom"
+            domain = "main"
+            [[device]]
+            name = "mapctl"
+            kind = "lynx.mapctl"
+            domain = "main"
+            [[bus]]
+            name = "cpu"
+            address_bits = 16
+            owner = "cpu0"
+            [[window]]
+            name = "w_ram_mid"
+            bus = "cpu"
+            device = "ram0"
+            base = "0x0000"
+            size = "0xFC00"
+            [[window]]
+            name = "w_ram_rom"
+            bus = "cpu"
+            device = "ram0"
+            base = "0xFE00"
+            size = "0x01F8"
+            [[window]]
+            name = "w_ram_vec"
+            bus = "cpu"
+            device = "ram0"
+            base = "0xFFFA"
+            size = "0x0006"
+            [[window]]
+            name = "w_bootrom"
+            bus = "cpu"
+            device = "bootrom"
+            base = "0xFE00"
+            size = "0x0200"
+            overlay = "lynx_boot"
+            overlay_read_priority = 3
+            overlay_write_priority = 0
+            [[window]]
+            name = "w_mapctl"
+            bus = "cpu"
+            device = "mapctl"
+            base = "0xFFF8"
+            size = "0x0002"
+            overlay = "mapctl_regs"
+            overlay_read_priority = 2
+            overlay_write_priority = 2
+            [[connection]]
+            from = "cpu0.rom_ram"
+            to = "bootrom.rom_ram"
+            semantics = "display-sync"
+            [[connection]]
+            from = "cpu0.vec_ram"
+            to = "bootrom.vec_ram"
+            semantics = "display-sync"
+            [boot.ram0]
+            pattern = "zero"
+            [boot.bootrom]
+            hex = "{hex}"
+            "#
+        );
+        let parsed = demu_config::RawConfig::parse(&raw).expect("mini config parses");
+        let (config, warnings) = demu_config::validate(&parsed).expect("mini config validates");
+        for w in warnings {
+            eprintln!("warning: {} - {}", w.code, w.message);
+        }
+        Machine::assemble(config, &assemble::demu_ctors()).expect("mini machine assembles")
+    }
+
+    /// The image with the vector bytes of the machine's own flow.
+    fn image_of(code: &[u8]) -> Vec<u8> {
+        let mut image = vec![0x00u8; 512];
+        let n = code.len().min(508);
+        image[..n].copy_from_slice(&code[..n]);
+        // The reset and the IRQ vectors point at the image start.
+        let vectors: [u8; 4] = [0x00, 0xFE, 0x00, 0xFE];
+        image[508..512].copy_from_slice(&vectors);
+        image
+    }
+
+    fn cpu_pc_of(machine: &Machine) -> u16 {
+        let regs = machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers();
+        u16::try_from(regs["PC"]).expect("pc fits")
+    }
+
+    fn cpu_reg(machine: &Machine, name: &str) -> u64 {
+        machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers()
+            .get(name)
+            .copied()
+            .expect("register")
+    }
+
+    #[test]
+    fn loader_copies_its_tail_then_parks_in_the_ram() {
+        // The tail runs from the ROM page the first time, writes the
+        // map control, and the park instruction then fetches from the
+        // RAM underneath where the loader copied the tail.
+        let loader: [u8; 16] = [
+            0x78, // SEI
+            0xD8, // CLD
+            0xA2, 0x00, // LDX #$00
+            0xBD, 0x10, 0xFE, // LDA $FE10,X
+            0x9D, 0x10, 0xFE, // STA $FE10,X
+            0xE8, // INX
+            0xE0, 0x08, // CPX #$08
+            0xD0, 0xF5, // BNE back
+            0xEA, // NOP
+        ];
+        let mut image = image_of(&loader);
+        // The tail at $FE10: the map write (the ROM and the vector
+        // spaces off), then the park branch; the park's fetches come
+        // from the copied RAM bytes.
+        image[16..24].copy_from_slice(&[
+            0xA9, 0x0C, // LDA #$0C
+            0x8D, 0xF9, 0xFF, // STA $FFF9
+            0x80, 0xFE, // BRA $FE15 from the copied tail
+            0xEA,
+        ]);
+
+        let mut machine = mini_machine(&image);
+        machine.boot();
+        machine.run_until(Tick(4 * 300));
+        // The map control kept the written form and the ROM slice
+        // reads the RAM underneath now.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xFFF9)), 0x0C);
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0xFE10)),
+            0xA9,
+            "the copied tail is visible as the RAM view"
+        );
+        // The core parked at the branch: the taken BRA returns to its
+        // own first byte.
+        assert_eq!(cpu_pc_of(&machine), 0xFE15);
+    }
+
+    #[test]
+    fn map_write_unmaps_the_boot_rom_slice_to_the_ram() {
+        let loader: [u8; 15] = [
+            0xA2, 0x00, // LDX #$00
+            0xBD, 0x15, 0xFE, // LDA $FE15,X
+            0x9D, 0x15, 0xFE, // STA $FE15,X
+            0xE8, // INX
+            0xE0, 0x08, // CPX #$08
+            0xD0, 0xF5, // BNE back
+            0xEA, 0xEA,
+        ];
+        let mut image = image_of(&loader);
+        // The gap between the loader and the tail position stays a
+        // NOP stream.
+        image[15..21].fill(0xEA);
+        // The tail at $FE15: the map write of the ROM space only, then
+        // the stop state.
+        image[21..28].copy_from_slice(&[
+            0xA9, 0x04, // LDA #$04
+            0x8D, 0xF9, 0xFF, // STA $FFF9
+            0xDB, // STP
+            0xEA,
+        ]);
+
+        let mut machine = mini_machine(&image);
+        machine.boot();
+        machine.run_until(Tick(4 * 200));
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xFFF9)), 0x04);
+        // The ROM slice reads the RAM (zeros); the copied tail shows
+        // through it at its own position.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xFE00)), 0x00);
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xFE15)), 0xA9);
+        // The core stopped on the copied STP byte: the stopped run
+        // returned, with the park state holding the stop byte's
+        // position.
+        assert!(machine.now() < Tick(4 * 200), "the stopped run ended early");
+        assert_eq!(cpu_pc_of(&machine), 0xFE1B);
+    }
+
+    #[test]
+    fn the_irq_wake_releases_a_parked_core() {
+        let image = image_of(&[0xEA, 0x58, 0xCB, 0xEA]); // NOP CLI WAI NOP
+        let mut machine = mini_machine(&image);
+        machine.boot();
+        machine.run_until(Tick(100));
+        // The WAI parked the core: no next event.
+        assert_eq!(
+            machine.device_by_name("cpu0").and_then(|d| d.next_event()),
+            None
+        );
+        // The IRQ line rises through the test and the run picks the
+        // parked core up for the service.
+        {
+            let Some(cpu) = machine.device_by_name_mut("cpu0") else {
+                panic!("cpu0 exists");
+            };
+            cpu.notify_line("irq", Level::High, Tick(100));
+        }
+        machine.run_until(Tick(1000));
+        // The level IRQ stays asserted with the disable clear: the
+        // service loop ran and every push landed on the stack. The pc
+        // keeps returning to the vector's target.
+        assert_eq!(
+            cpu_pc_of(&machine),
+            0xFE00,
+            "the service loop parks at the vector"
+        );
+        assert_ne!(cpu_reg(&machine, "SP"), 0xFF, "the pushes ran");
+    }
+
+    #[test]
+    fn the_high_speed_bit_lengthens_every_cycle() {
+        let boot_image = |ctl: u8| {
+            image_of(&[
+                0xA9, ctl, // LDA #ctl
+                0x8D, 0xF9, 0xFF, // STA $FFF9
+                0xA2, 0x00, // LDX #$00
+                0xE8, // INX
+                0xE0, 0xFF, // CPX #$FF
+                0xD0, 0xFB, // BNE back
+                0x80, 0xFE, // park
+            ])
+        };
+        let mut normal = mini_machine(&boot_image(0x00));
+        normal.boot();
+        normal.run_until(Tick(2000));
+        let mut high = mini_machine(&boot_image(0x80));
+        high.boot();
+        high.run_until(Tick(2000));
+        // Both cores sit in the same counting loop; the high-speed
+        // core consumed a tick more per cycle, so its loop counter
+        // stays behind.
+        assert!(
+            cpu_reg(&normal, "X") > cpu_reg(&high, "X"),
+            "the high-speed core lags"
+        );
+    }
+
+    #[test]
+    fn the_mini_runs_deterministically() {
+        let image = image_of(&[
+            0x78, 0xD8, 0xEA, 0xEA, 0xA2, 0x00, 0x18, 0xE8, 0xCA, 0xE0, 0x0A,
+        ]);
+        let run = || -> (Tick, Vec<u8>) {
+            let mut machine = mini_machine(&image);
+            machine.boot();
+            machine.run_until(Tick(4000));
+            let mut out = Vec::new();
+            machine.save(&mut out).expect("save");
+            (machine.now(), out)
+        };
+        let (t1, s1) = run();
+        let (t2, s2) = run();
+        assert_eq!(t1, t2);
+        assert_eq!(s1, s2, "identical runs produce identical state");
+    }
+
+    #[test]
+    fn save_and_restore_continues_identically() {
+        let image = image_of(&[0x78, 0xD8, 0xEA, 0xEA, 0xE8, 0xCA]);
+        let mut machine = mini_machine(&image);
+        machine.boot();
+        machine.run_until(Tick(2000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+
+        // Two machines restored from the same save continue
+        // identically (the live machine's queue re-seeds from device
+        // state, so it is not a comparable twin).
+        let mut twin_a = mini_machine(&image);
+        twin_a.load(&buf).expect("load twin a");
+        let mut twin_b = mini_machine(&image);
+        twin_b.load(&buf).expect("load twin b");
+        twin_a.run_until(Tick(4000));
+        twin_b.run_until(Tick(4000));
+        let mut again = Vec::new();
+        twin_a.save(&mut again).expect("save");
+        let mut check = Vec::new();
+        twin_b.save(&mut check).expect("save");
+        assert_eq!(again, check, "the two restores continue identically");
+    }
+
+    /// Assemble and boot one machine from a bundled triple, with the
+    /// boot image as the boot-state override of one device.
+    fn bundled_machine(triple: &str, device: &str, image: Option<Vec<u8>>) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let mut machine = Machine::assemble(config, &assemble::demu_ctors()).expect("assemble");
+        if let Some(bytes) = image {
+            machine
+                .override_boot(device, demu_config::model::BootState::Hex { bytes })
+                .expect("boot");
+        }
+        machine.boot();
+        machine
+    }
+
+    #[test]
+    fn the_bundled_lynx_assembles_to_the_published_family() {
+        let machine = bundled_machine("vl65nc02-atari-lynx", "bootrom", None);
+        assert_eq!(machine.config.clocks.len(), 1, "the single crystal");
+        assert_eq!(machine.config.devices.len(), 7, "the seven device slots");
+        // The pad and switch bytes answer from the Mikey die: the pad
+        // reads clear and the switch byte carries the cart slot lines
+        // high.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xFCB0)), 0x00);
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xFCB1)), 0x06);
+        // The map control keeps the boot gates: every space maps to
+        // the hardware or the ROM.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xFFF9)), 0x00);
+    }
+
+    #[test]
+    fn the_bundled_lynx_injected_pads_reach_the_die() {
+        let mut machine = bundled_machine("vl65nc02-atari-lynx", "bootrom", None);
+        {
+            let Some(mikey) = machine.device_by_name_mut("mikey") else {
+                panic!("mikey exists");
+            };
+            assert!(mikey.input_mut().expect("sink").inject("press up"));
+        }
+        // The injected press shows through the pad register on the
+        // bus, and the die owns the window over the Suzy page.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xFCB0)), 0x80);
+    }
+
+    #[test]
+    fn the_bundled_lynx_boot_copies_and_parks_in_the_ram() {
+        // The boot ROM image carries the copy flow of the check
+        // screen: the ROM page copies its tail into the RAM underneath
+        // and the map write then parks the core in the copied RAM.
+        let loader: [u8; 16] = [
+            0x78, // SEI
+            0xD8, // CLD
+            0xA2, 0x00, // LDX #$00
+            0xBD, 0x10, 0xFE, // LDA $FE10,X
+            0x9D, 0x10, 0xFE, // STA $FE10,X
+            0xE8, // INX
+            0xE0, 0x08, // CPX #$08
+            0xD0, 0xF5, // BNE back
+            0xEA, // NOP
+        ];
+        let mut image = image_of(&loader);
+        image[16..24].copy_from_slice(&[
+            0xA9, 0x0C, // LDA #$0C: the ROM and the vector spaces off
+            0x8D, 0xF9, 0xFF, // STA $FFF9
+            0x80, 0xFE, // BRA back to its own byte
+            0xEA,
+        ]);
+        let mut machine = bundled_machine("vl65nc02-atari-lynx", "bootrom", Some(image));
+        machine.run_until(Tick(4 * 300));
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0xFFF9)),
+            0x0C,
+            "the boot ROM wrote the map control"
+        );
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0xFE10)),
+            0xA9,
+            "the copied tail shows through the gated ROM slice"
+        );
+        assert_eq!(
+            cpu_pc_of(&machine),
+            0xFE15,
+            "the core parked in the copied RAM"
+        );
+    }
+}
+#[cfg(test)]
+pub mod pce_machine_tests {
+    use crate::assemble;
+    use demu_core::Tick;
+    use demu_core::machine::Machine;
+
+    /// Assemble the mini HuC6280 machine: the core, the work RAM, and
+    /// the HuCard, with the published reset flow.
+    fn mini_machine(card_image: &[u8]) -> Machine {
+        let mut hex = String::new();
+        for b in card_image {
+            hex.push_str(&format!("{:02x}", b));
+        }
+        let raw = format!(
+            r#"
+            [system]
+            name = "huc-mini"
+            triple = "test"
+            description = "the mini HuC6280 machine of the framework tests"
+            [clock.main]
+            frequency = "21477270"
+            [[device]]
+            name = "cpu0"
+            kind = "huc6280.cpu"
+            domain = "main"
+            [device.dividers]
+            cpu = 3
+            [[device]]
+            name = "ram0"
+            kind = "pce.ram"
+            domain = "main"
+            [device.params]
+            size = 8192
+            [[device]]
+            name = "cart"
+            kind = "pce.cart"
+            domain = "main"
+            [[bus]]
+            name = "cpu"
+            address_bits = 21
+            owner = "cpu0"
+            [[window]]
+            name = "w_card"
+            bus = "cpu"
+            device = "cart"
+            base = "0x000000"
+            size = "0x1EE000"
+            [[window]]
+            name = "w_ram"
+            bus = "cpu"
+            device = "ram0"
+            base = "0x1F0000"
+            size = "0x002000"
+            [boot.ram0]
+            pattern = "zero"
+            [boot.cart]
+            hex = "{hex}"
+            "#
+        );
+        let parsed = demu_config::RawConfig::parse(&raw).expect("mini config parses");
+        let (config, warnings) = demu_config::validate(&parsed).expect("mini config validates");
+        for w in warnings {
+            eprintln!("warning: {} - {}", w.code, w.message);
+        }
+        Machine::assemble(config, &assemble::demu_ctors()).expect("mini machine assembles")
+    }
+
+    /// The card image of a program and the vector tail.
+    fn card_of(code: &[u8], vectors: &[(usize, u8)], size: usize) -> Vec<u8> {
+        let mut image = vec![0u8; size];
+        for (i, b) in code.iter().enumerate() {
+            image[i] = *b;
+        }
+        for (at, b) in vectors {
+            if *at < size + 1 && *at > 0 {
+                let at = *at;
+                image[at] = *b;
+            }
+        }
+        image
+    }
+
+    fn cpu_reg(machine: &Machine, name: &str) -> u64 {
+        machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers()
+            .get(name)
+            .copied()
+            .expect("register")
+    }
+
+    fn cpu_pc_of(machine: &Machine) -> u16 {
+        u16::try_from(cpu_reg(machine, "PC")).expect("pc fits")
+    }
+
+    #[test]
+    fn pce_runs_the_reset_vector_through_bank_zero() {
+        // The reset code parks; the vectors live in card bank 0.
+        let image = card_of(
+            &[0xEA, 0x18, 0x80, 0xFE],
+            &[(0x1FFE, 0x00), (0x1FFF, 0xE0)],
+            0x2000,
+        );
+        let mut machine = mini_machine(&image);
+        machine.boot();
+        machine.run_until(Tick(3 * 100));
+        // The MPR 7 default bank 0 carried the reset vector; the pc
+        // landed in the park branch.
+        assert_eq!(cpu_pc_of(&machine), 0xE002, "the reset program ran");
+    }
+
+    #[test]
+    fn tam_maps_a_bank_into_zero_page() {
+        // MPR 0 set to bank 0 makes CPU $0000 read the card.
+        let code = [
+            0xA9, 0x00, // LDA #$00
+            0x53, 0x01, // TAM #01: MPR0 = A
+            0xAD, 0x00, 0x00, // LDA $0000
+            0x80, 0xFE, // park
+        ];
+        let image = card_of(&code, &[(0x1FFE, 0x00), (0x1FFF, 0xE0)], 0x2000);
+        let mut machine = mini_machine(&image);
+        machine.boot();
+        machine.run_until(Tick(3 * 100));
+        assert_eq!(cpu_pc_of(&machine), 0xE007, "the program parked");
+        assert_eq!(
+            cpu_reg(&machine, "A"),
+            0xA9,
+            "the mapped bank read through MPR0"
+        );
+    }
+
+    #[test]
+    fn the_work_ram_sits_at_bank_f8() {
+        // A store through MPR1's default $F8 reaches the work RAM.
+        let code = [
+            0xA9, 0x42, // LDA #$42
+            0x8D, 0x00, 0x20, // STA $2000
+            0x80, 0xFE, // park
+        ];
+        let image = card_of(&code, &[(0x1FFE, 0x00), (0x1FFF, 0xE0)], 0x2000);
+        let mut machine = mini_machine(&image);
+        machine.boot();
+        machine.run_until(Tick(3 * 100));
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0x1F_0000)),
+            0x42,
+            "the zero page view stored into the work RAM"
+        );
+    }
+
+    #[test]
+    fn the_timer_serves_through_the_timer_vector() {
+        // The timer runs at the fastest rate; the IRQ enable turns the
+        // timer source on; the service lands in the timer park.
+        let code = [
+            0xA9, 0x0A, // LDA #$0A
+            0x8D, 0x00, 0x0C, // STA $0C00 (the preset)
+            0xA9, 0x01, 0x8D, 0x01, 0x0C, // STA $0C01 (start and enable)
+            0xA9, 0x04, 0x8D, 0x01, 0x14, // STA $1401 (the legacy timer enable form)
+            0x58, // CLI
+            0x80, 0xFE, // park in a self branch
+        ];
+        let mut image = card_of(
+            &code,
+            &[
+                (0x1FFA, 0x40),
+                (0x1FFB, 0xE0),
+                (0x1FFE, 0x00),
+                (0x1FFF, 0xE0),
+            ],
+            0x2100,
+        );
+        // The timer service parks at $E040.
+        image[0x40] = 0x80;
+        image[0x41] = 0xFE;
+        let mut machine = mini_machine(&image);
+        machine.boot();
+        machine.run_until(Tick(3 * 20_000));
+        // The timer underflowed, the entry ran, and the program parked
+        // in the service park.
+        assert_eq!(cpu_pc_of(&machine), 0xE040, "the timer service ran");
+        let p = cpu_reg(&machine, "P");
+        assert_eq!(p & 0x04, 0x04, "the entry left the disable set");
+        assert_ne!(
+            cpu_reg(&machine, "S") & 0x03,
+            0,
+            "the service pushed the three bytes"
+        );
+    }
+
+    #[test]
+    fn pce_runs_deterministically() {
+        let code = [0xEA, 0xE8, 0xCA, 0x18, 0x80, 0xFE];
+        let run = || -> (Tick, Vec<u8>) {
+            let image = card_of(&code, &[(0x1FFE, 0x00), (0x1FFF, 0xE0)], 0x2100);
+            let mut machine = mini_machine(&image);
+            machine.boot();
+            machine.run_until(Tick(6000));
+            let mut out = Vec::new();
+            machine.save(&mut out).expect("save");
+            (machine.now(), out)
+        };
+        let (t1, s1) = run();
+        let (t2, s2) = run();
+        assert_eq!(t1, t2);
+        assert_eq!(s1, s2, "identical runs produce identical state");
+    }
+
+    #[test]
+    fn pce_save_and_restore_continues_identically() {
+        let code = [0xEA, 0xE8, 0xCA, 0x18, 0x80, 0xFE];
+        let image = card_of(&code, &[(0x1FFE, 0x00), (0x1FFF, 0xE0)], 0x2100);
+        let mut machine = mini_machine(&image);
+        machine.boot();
+        machine.run_until(Tick(3000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        // Two machines restored from the same save continue
+        // identically.
+        let mut twin_a = mini_machine(&image);
+        twin_a.load(&buf).expect("load a");
+        let mut twin_b = mini_machine(&image);
+        twin_b.load(&buf).expect("load b");
+        twin_a.run_until(Tick(6000));
+        twin_b.run_until(Tick(6000));
+        let mut again = Vec::new();
+        twin_a.save(&mut again).expect("save");
+        let mut check = Vec::new();
+        twin_b.save(&mut check).expect("save");
+        assert_eq!(again, check, "the two restores continue identically");
+    }
+
+    /// Assemble and boot one machine from a bundled triple, with the
+    /// card image as the boot-state override of the HuCard.
+    fn bundled_machine(triple: &str, image: Option<Vec<u8>>) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let mut machine = Machine::assemble(config, &assemble::demu_ctors()).expect("assemble");
+        if let Some(bytes) = image {
+            machine
+                .override_boot("cart", demu_config::model::BootState::Hex { bytes })
+                .expect("boot");
+        }
+        machine.boot();
+        machine
+    }
+
+    #[test]
+    fn the_bundled_engine_assembles_to_the_published_family() {
+        let machine = bundled_machine("mos6502-nec-pcengine", None);
+        assert_eq!(machine.config.clocks.len(), 1, "the single crystal");
+        assert_eq!(machine.config.devices.len(), 7, "the seven device slots");
+        // The VDC status port answers through its window with its
+        // cleared flag form, and the VCE control byte reads back.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0x1FE000)), 0x00);
+        assert_eq!(machine.peek("cpu", demu_core::Address(0x1FE400)), 0x00);
+        // The direct color-table face answers the entry bytes of the
+        // published window: the reset palette is black at entry zero.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0x1FF800)), 0x00);
+        assert_eq!(machine.peek("cpu", demu_core::Address(0x1FF9FE)), 0x00);
+    }
+
+    #[test]
+    fn the_bundled_engine_boots_and_parks_through_the_card() {
+        let image = card_of(
+            &[0xEA, 0x18, 0x80, 0xFE],
+            &[(0x1FFE, 0x00), (0x1FFF, 0xE0)],
+            0x4000,
+        );
+        let mut machine = bundled_machine("mos6502-nec-pcengine", Some(image));
+        machine.run_until(Tick(3 * 100));
+        assert_eq!(
+            cpu_pc_of(&machine),
+            0xE002,
+            "the reset program ran and parked"
+        );
+        // The video pair stays in its reset form through the park.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0x1FE000)), 0x00);
+        // The turbotap pad answers the I/O page with the idle row
+        // form: no press at the pad select, the country line clear
+        // on the not-Japan form.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0x1FF000)), 0x3F);
+    }
+}

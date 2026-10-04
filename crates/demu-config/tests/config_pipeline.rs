@@ -127,6 +127,18 @@ fn cpu_kind_must_match_triple_family() {
 }
 
 #[test]
+fn the_pcengine_triple_accepts_the_huc6280_kind() {
+    let mut raw = base_config();
+    raw.system.as_mut().unwrap().triple = "mos6502-nec-pcengine".into();
+    raw.device[0].kind = "huc6280.cpu".to_string();
+    let (config, _) = validate(&raw).expect("the real chip kind passes");
+    assert_eq!(config.devices[0].kind.as_str(), "huc6280.cpu");
+    // Other triples keep the strict family rule.
+    raw.system.as_mut().unwrap().triple = "z80-smoke".into();
+    assert!(validate(&raw).is_err());
+}
+
+#[test]
 fn device_off_bus_is_rejected() {
     let mut raw = base_config();
     raw.window.clear();

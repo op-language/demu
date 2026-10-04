@@ -4,4 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "MOS 65SC02 CPU core."
+description = "The MOS 65SC02 CPU family: the CMOS core and the VL65NC02 of the Atari Lynx."
+
+[dependencies]
+demu-config = { version = "0.1.0", path = "../demu-config" }
+demu-core = { version = "0.1.0", path = "../demu-core" }

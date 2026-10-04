@@ -1,8 +1,9 @@
-//! The SM83 cartridge device: header parsing, ROM banking, and the
-//! MBC1, MBC2, MBC3, and MBC5 memory bank controllers.
+//! The cartridge devices: the header parsing, ROM banking, and MBC1,
+//! MBC2, MBC3, and MBC5 memory bank controllers of the SM83; the Atari
+//! 2600, 5200, and 7800 loaders; the Lynx loader with the published
+//! LNX header and its page banking; and the PC Engine HuCard loader.
 //!
-//! The boot state carries the cartridge image (a file path or a hex
-//! dump). The boot read parses the `0x100-0x14F` header, sizes the
+//! The SM83 boot read parses the `0x100-0x14F` header, sizes the
 //! cartridge RAM from the header, and selects the mapper: the `mbc`
 //! parameter when present, otherwise the header cart type byte. Battery
 //!-backed RAM keeps its bytes across reset; a volatile RAM boots from
@@ -10,11 +11,15 @@
 //! stored but do not tick.
 
 pub mod atari;
+pub mod lynx;
 pub mod nes;
+pub mod pce;
 pub mod snes;
 
 pub use atari::{Atari2600Cart, Atari5200Cart, Atari7800Cart};
+pub use lynx::LynxCart;
 pub use nes::{NesCart, NesHeader, NesMapper};
+pub use pce::PceCart;
 pub use snes::SnesCart;
 
 use demu_config::model::BootState;

@@ -1,6 +1,7 @@
 //! The audio device family: the SM83 APU, the NES APU, the Atari
 //! POKEY, the C64 SID, the SNES S-SMP sound die with its S-DSP
-//! engine, and the Apple IIgs Ensoniq DOC.
+//! engine, the Apple IIgs Ensoniq DOC, and the PC Engine PSG of the
+//! HuC6280.
 //!
 //! The SM83 four channels: two pulse channels with sweep and envelope,
 //! a wave channel with its own sample memory, and a noise channel. The
@@ -13,12 +14,14 @@ pub mod apu;
 pub mod dsp;
 pub mod iigsdoc;
 pub mod nes;
+pub mod pce;
 pub mod pokey;
 pub mod sid;
 
 pub use dsp::Sdsp;
 pub use iigsdoc::IigsDoc;
 pub use nes::NesApu;
+pub use pce::PcePsg;
 pub use pokey::Pokey;
 pub use sid::Sid;
 

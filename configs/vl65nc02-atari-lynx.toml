@@ -1,0 +1,248 @@
+# Atari Lynx, the canonical system configuration.
+#
+# One clock domain at the 16 MHz master crystal: the VTI 65C02 die of
+# the Mikey chip runs at /4 (4 MHz), the Suzy sprite engine at its full
+# dot rate, and the Mikey LCD walk at /8 (2 MHz).
+#
+# The Mikey chip wires the address space of the VTI die: the MAPCTL
+# register at $FFF9 carries the four space bits (Suzy $FC00, Mikey
+# $FD00, ROM $FE00-$FFF7, vectors $FFFA-$FFFF); a set bit moves the
+# space to the RAM underneath. The CPU core reads the register back at
+# every instruction boundary and drives the overlay lines over the
+# declared connections; the high-speed bit (bit 7) lengthens the core
+# cycle to five domain ticks.
+#
+# The cartridge is a stream device, not a memory-mapped one: the boot
+# ROM and the program read it through the RCART0/RCART1 ports at
+# $FCB2/$FCB3 while the page-select strobe and data bits travel on the
+# declared lines from the Mikey SYSCTL1 and IODAT registers.
+
+[system]
+name = "Atari Lynx"
+triple = "vl65nc02-atari-lynx"
+description = "The Atari Lynx with the VTI die of the Mikey chip, the Suzy sprite die, and the stream cartridge."
+
+[clock.main]
+frequency = "16000000"
+origin = "the Lynx master crystal; the CPU sits at /4 and the LCD walk at /8"
+
+[[device]]
+name = "cpu0"
+kind = "vl65nc02.cpu"
+domain = "main"
+[device.dividers]
+cpu = 4
+
+[[device]]
+name = "suzy"
+kind = "lynx.suzy"
+domain = "main"
+
+[[device]]
+name = "mikey"
+kind = "lynx.mikey"
+domain = "main"
+[device.dividers]
+dot = 8
+
+[[device]]
+name = "ram0"
+kind = "lynx.ram"
+domain = "main"
+[device.params]
+size = 65536
+
+[[device]]
+name = "bootrom"
+kind = "lynx.bootrom"
+domain = "main"
+
+[[device]]
+name = "mapctl"
+kind = "lynx.mapctl"
+domain = "main"
+
+[[device]]
+name = "cart"
+kind = "lynx.cart"
+domain = "main"
+[device.params]
+form = "raw"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+# The main RAM and the four overlay-gated spaces. The Suzy and Mikey
+# register pages, the boot ROM slice, and the vector slice all keep the
+# RAM underneath; their gates follow the MAPCTL lines.
+[[window]]
+name = "w_ram_low"
+bus = "cpu"
+device = "ram0"
+base = "0x0000"
+size = "0xFC00"
+
+[[window]]
+name = "w_ram_suzy"
+bus = "cpu"
+device = "ram0"
+base = "0xFC00"
+size = "0x0100"
+
+[[window]]
+name = "w_ram_mikey"
+bus = "cpu"
+device = "ram0"
+base = "0xFD00"
+size = "0x0100"
+
+[[window]]
+name = "w_ram_rom"
+bus = "cpu"
+device = "ram0"
+base = "0xFE00"
+size = "0x01F8"
+
+[[window]]
+name = "w_ram_vec"
+bus = "cpu"
+device = "ram0"
+base = "0xFFFA"
+size = "0x0006"
+
+# The Suzy register page and the two cartridge read ports. The RCART
+# ports sit inside the Suzy space and answer from the cart device.
+[[window]]
+name = "w_suzy"
+bus = "cpu"
+device = "suzy"
+base = "0xFC00"
+size = "0x0100"
+overlay = "suzy_regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_rcart0"
+bus = "cpu"
+device = "cart"
+base = "0xFCB2"
+size = "0x0001"
+overlay = "suzy_regs"
+overlay_read_priority = 2
+overlay_write_priority = 2
+
+[[window]]
+name = "w_rcart1"
+bus = "cpu"
+device = "cart"
+base = "0xFCB3"
+size = "0x0001"
+overlay = "suzy_regs"
+overlay_read_priority = 2
+overlay_write_priority = 2
+
+# The pad and switch bytes of the published joypad port: the Mikey
+# die answers them while its space stays mapped to the hardware. The
+# pad bytes track the Mikey space view; the Suzy-view RAM form of the
+# pad range stays out of this build.
+[[window]]
+name = "w_pads"
+bus = "cpu"
+device = "mikey"
+base = "0xFCB0"
+size = "0x0002"
+overlay = "suzy_regs"
+overlay_read_priority = 2
+overlay_write_priority = 2
+
+# The Mikey register page keeps the direct view; the map-control
+# register answers $FFF8-$FFF9 above the boot ROM.
+[[window]]
+name = "w_mikey"
+bus = "cpu"
+device = "mikey"
+base = "0xFD00"
+size = "0x0100"
+overlay = "mikey_regs"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_mapctl"
+bus = "cpu"
+device = "mapctl"
+base = "0xFFF8"
+size = "0x0002"
+overlay = "mapctl_regs"
+overlay_read_priority = 2
+overlay_write_priority = 2
+
+# The boot ROM slice sits over the vector RAM with the read priority;
+# the vector RAM keeps the writes.
+[[window]]
+name = "w_bootrom"
+bus = "cpu"
+device = "bootrom"
+base = "0xFE00"
+size = "0x0200"
+overlay = "lynx_boot"
+overlay_read_priority = 3
+overlay_write_priority = 0
+
+# The Mikey die carries the timers, the joypad, and the ROM read
+# strobes; their IRQ and the cartridge pins connect here.
+[[connection]]
+from = "mikey.irq"
+to = "cpu0.irq"
+semantics = "irq"
+
+[[connection]]
+from = "mikey.audin"
+to = "cart.audin"
+semantics = "display-sync"
+
+[[connection]]
+from = "mikey.cart_strobe"
+to = "cart.strobe"
+semantics = "display-sync"
+
+[[connection]]
+from = "mikey.cart_data"
+to = "cart.data"
+semantics = "display-sync"
+
+[[connection]]
+from = "cpu0.suzy_ram"
+to = "suzy.suzy_ram"
+semantics = "display-sync"
+
+[[connection]]
+from = "cpu0.suzy_ram"
+to = "cart.suzy_ram"
+semantics = "display-sync"
+
+[[connection]]
+from = "cpu0.mikey_ram"
+to = "mikey.mikey_ram"
+semantics = "display-sync"
+
+[[connection]]
+from = "cpu0.rom_ram"
+to = "bootrom.rom_ram"
+semantics = "display-sync"
+
+[[connection]]
+from = "cpu0.vec_ram"
+to = "bootrom.vec_ram"
+semantics = "display-sync"
+
+# The main RAM boots zeroed; the boot ROM loads through the boot
+# state of the positional flow.
+[boot.ram0]
+pattern = "zero"
+
+[quirks]
+"vl65nc02.bbr_smb" = false

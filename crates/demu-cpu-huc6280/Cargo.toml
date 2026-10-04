@@ -4,4 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "HuC6280 CPU core."
+description = "The Hudson Soft HuC6280 CPU family: the 65C02-superset die of the PC Engine."
+
+[dependencies]
+demu-config = { version = "0.1.0", path = "../demu-config" }
+demu-core = { version = "0.1.0", path = "../demu-core" }

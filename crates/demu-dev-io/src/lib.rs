@@ -1,7 +1,9 @@
 //! The IO device family: the SM83 timer, joypad, and catch-all
 //! register block, the NES and Atari controller and support devices,
 //! the Apple II keyboard and switch block, the Disk II drive, the
-//! CIA and PIA support chips, and the SNES controller port.
+//! CIA and PIA support chips, the SNES controller port, the Lynx
+//! Mikey die's timers, LCD line engine, joypad, cart page select
+//! line, and serial surface, and the PC Engine turbo-tap pad.
 //!
 //! The SM83 timer runs on a free-running system counter that
 //! increments once per T-cycle. The timer register `DIV` is the
@@ -18,7 +20,9 @@ pub mod disk2;
 mod drive;
 pub mod iwm;
 pub mod mega2;
+pub mod mikey;
 pub mod nes;
+pub mod pce;
 pub mod pia;
 pub mod riot;
 pub mod snespad;
@@ -28,7 +32,9 @@ pub use cia::Cia;
 pub use disk2::Disk2;
 pub use iwm::Iwm;
 pub use mega2::Mega2;
+pub use mikey::LynxMikey;
 pub use nes::Controller;
+pub use pce::PceTurbotap;
 pub use pia::Pia;
 pub use riot::Riot;
 pub use snespad::SnesPad;

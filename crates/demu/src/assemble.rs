@@ -3,14 +3,19 @@
 //! The binary composes the device constructors of the machine
 //! families: the Game Boy and Game Boy Color of the SM83 family, the
 //! NES and the Apple II machines of the 6502 family, the 2600, 5200,
-//! 800, and 7800 forms of the Atari and Commodore families, and the
-//! SNES and Apple IIgs of the 65C816 family. The configuration
+//! 800, and 7800 forms of the Atari and Commodore families, the SNES
+//! and Apple IIgs of the 65C816 family, the Lynx of the 65SC02
+//! family, and the PC Engine of the HuC6280 family. The configuration
 //! selects kinds by name; this registry supplies the compiled
 //! constructors.
 
 use demu_config::model::DeviceInstance;
 use demu_core::device::Device;
 use demu_core::machine::{DeviceCtors, MachineError};
+use demu_cpu_huc6280::CpuDevice as HucCpuDevice;
+use demu_cpu_huc6280::Huc6280;
+use demu_cpu_mos65sc02::CpuDevice as Sc02CpuDevice;
+use demu_cpu_mos65sc02::Mos65Sc02;
 use demu_cpu_sm83::CpuDevice as Sm83CpuDevice;
 use demu_cpu_sm83::Sm83;
 use demu_cpu_wdc65c816::CpuDevice as WdcCpuDevice;
@@ -18,17 +23,25 @@ use demu_cpu_wdc65c816::Wdc65c816;
 use demu_dev_audio::Apu;
 use demu_dev_audio::IigsDoc;
 use demu_dev_audio::NesApu;
+use demu_dev_audio::PcePsg;
 use demu_dev_audio::apu::Apu as SnesApu;
 use demu_dev_cartridge::Cart;
+use demu_dev_cartridge::LynxCart;
 use demu_dev_cartridge::NesCart;
+use demu_dev_cartridge::PceCart;
 use demu_dev_cartridge::SnesCart;
 use demu_dev_dma::{Hdma, OamDma, SnesSys};
 use demu_dev_io::Iwm;
+use demu_dev_io::LynxMikey;
+use demu_dev_io::PceTurbotap;
 use demu_dev_io::{Io, Joypad, Mega2, SnesPad};
 use demu_dev_memory::{Bootrom, Hram, Wram};
+use demu_dev_memory::{LynxBootrom, LynxMapCtl};
 use demu_dev_video::NesPpu;
 use demu_dev_video::Ppu;
 use demu_dev_video::SnesPpu;
+use demu_dev_video::lynx::LynxSuzy;
+use demu_dev_video::pce::{PceVce, PceVdc};
 
 /// The device kind that carries the cartridge image.
 pub const CART_KIND: &str = "sm83.cart";
@@ -141,6 +154,21 @@ pub fn demu_ctors() -> DeviceCtors {
     ctors.register("iigs.doc", Box::new(new_iigs_doc));
     ctors.register("iigs.mega2", Box::new(new_iigs_mega2));
     ctors.register("iigs.iwm", Box::new(new_iigs_iwm));
+    ctors.register("vl65nc02.cpu", Box::new(new_vl65_cpu));
+    ctors.register("mos65sc02.cpu", Box::new(new_sc02_cpu));
+    ctors.register("huc6280.cpu", Box::new(new_huc_cpu));
+    ctors.register("lynx.ram", Box::new(new_lynx_ram));
+    ctors.register("lynx.bootrom", Box::new(new_lynx_bootrom));
+    ctors.register("lynx.mapctl", Box::new(new_lynx_mapctl));
+    ctors.register("lynx.mikey", Box::new(new_lynx_mikey));
+    ctors.register("lynx.suzy", Box::new(new_lynx_suzy));
+    ctors.register("lynx.cart", Box::new(new_lynx_cart));
+    ctors.register("pce.vdc", Box::new(new_pce_vdc));
+    ctors.register("pce.vce", Box::new(new_pce_vce));
+    ctors.register("pce.psg", Box::new(new_pce_psg));
+    ctors.register("pce.joypad", Box::new(new_pce_joypad));
+    ctors.register("pce.ram", Box::new(new_pce_ram));
+    ctors.register("pce.cart", Box::new(new_pce_cart));
     ctors
 }
 
@@ -487,4 +515,124 @@ fn new_iigs_iwm(
     _config: &demu_config::model::SystemConfig,
 ) -> Result<Box<dyn Device>, MachineError> {
     Ok(Box::new(Iwm::new(device)))
+}
+
+// The 65SC02 device family: the Lynx machine slice and the plain CMOS
+// core.
+
+fn new_vl65_cpu(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Sc02CpuDevice::Vl65Nc02(Mos65Sc02::new(
+        device, config,
+    ))))
+}
+
+fn new_sc02_cpu(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Sc02CpuDevice::Mos65Sc02(Mos65Sc02::new(
+        device, config,
+    ))))
+}
+
+fn new_huc_cpu(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(HucCpuDevice::Huc6280(Huc6280::new(
+        device, config,
+    ))))
+}
+
+fn new_lynx_ram(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let mut ram = demu_dev_memory::StaticRam::new(device)
+        .map_err(|e| MachineError::Assembly(e.to_string()))?;
+    ram.set_readonly(false);
+    Ok(Box::new(ram))
+}
+
+fn new_lynx_bootrom(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(LynxBootrom::new(device)))
+}
+
+fn new_lynx_mapctl(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(LynxMapCtl::new(device)))
+}
+
+fn new_lynx_mikey(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(LynxMikey::new(device)))
+}
+
+fn new_lynx_suzy(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(LynxSuzy::new(device, config)))
+}
+
+fn new_lynx_cart(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(LynxCart::new(device)))
+}
+
+fn new_pce_vdc(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(PceVdc::new(device, config)))
+}
+
+fn new_pce_vce(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(PceVce::new(device)))
+}
+
+fn new_pce_psg(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(PcePsg::new(device)))
+}
+
+fn new_pce_joypad(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(PceTurbotap::new(device)))
+}
+
+fn new_pce_ram(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let mut ram = demu_dev_memory::StaticRam::new(device)
+        .map_err(|e| MachineError::Assembly(e.to_string()))?;
+    ram.set_readonly(false);
+    Ok(Box::new(ram))
+}
+
+fn new_pce_cart(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(PceCart::new(device)))
 }

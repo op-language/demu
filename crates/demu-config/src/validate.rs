@@ -631,12 +631,18 @@ fn check_semantic(raw: &RawConfig, partial: Option<&PartialConfig>, errors: &mut
     // the synthetic "smoke", carries no CPU family constraint.
     let system = raw.system.as_ref().expect("schema layer checked [system]");
     let triple_cpu = triple_cpu_prefix(&system.triple);
+    let triple_extra = triple_cpu_exception(&system.triple);
     for (_, device) in &partial.devices {
         if triple_cpu.is_empty() {
             continue;
         }
         if device.kind.as_str().ends_with(".cpu")
             && !device.kind.family().eq_ignore_ascii_case(&triple_cpu)
+            && !triple_extra.is_some_and(|extra| {
+                extra
+                    .iter()
+                    .any(|family| device.kind.family().eq_ignore_ascii_case(family))
+            })
         {
             errors.push(ConfigError::Semantic {
                 message: format!(
@@ -717,6 +723,18 @@ fn triple_cpu_prefix(triple: &str) -> String {
         // A triple without a dash, like the synthetic "smoke", has no CPU
         // family constraint.
         None => String::new(),
+    }
+}
+
+/// The CPU kind families a triple accepts beyond its own prefix.
+///
+/// The PC Engine triple names the 6502 family but the machine carries
+/// the Hudson Soft HuC6280 die, so the config names the real chip kind
+/// while the triple keeps the compatibility form.
+fn triple_cpu_exception(triple: &str) -> Option<&'static [&'static str]> {
+    match triple {
+        "mos6502-nec-pcengine" => Some(&["huc6280"]),
+        _ => None,
     }
 }
 

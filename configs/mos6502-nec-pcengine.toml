@@ -1,0 +1,146 @@
+# PC Engine, the canonical system configuration.
+#
+# The HuC6280 die carries the CPU core with its eight MPR mapping
+# registers, the on-die timer, and the interrupt controller; it maps
+# every 8 KiB page of the 64 KiB logical space to one 8 KiB bank of the
+# 2 MiB physical space. The physical space hosts the HuCard image at
+# banks zero and up, the work RAM at bank $F8, and the hardware I/O
+# page at bank $FF. The zero-page and stack accesses route through MPR1
+# on the chip itself, so the zero page conventionally lives at $2000
+# and the stack at $2100.
+#
+# The video pair (the VDC and the VCE color encoder) shares one clock
+# domain: the master crystal carries the CPU at /3 (7.15909 MHz) and the
+# VDC dot clock at /4 (5.36931 MHz). The VDC's raster pipeline reads the
+# VCE palette RAM through the VCE's second bus window; the CPU's real
+# path to the palette is the register protocol that the VCE's first
+# window answers.
+
+[system]
+name = "PC Engine"
+triple = "mos6502-nec-pcengine"
+description = "The PC Engine with the HuC6280 die, the VDC and VCE video pair, the PSG, and the HuCard storage."
+
+[clock.main]
+frequency = "21477270"
+origin = "the NTSC master crystal; the CPU sits at /3 and the VDC dot at /4"
+
+[[device]]
+name = "cpu0"
+kind = "huc6280.cpu"
+domain = "main"
+[device.dividers]
+cpu = 3
+
+[[device]]
+name = "vdc"
+kind = "pce.vdc"
+domain = "main"
+[device.dividers]
+dot = 4
+[device.params]
+palette_base = 0x1FF800
+
+[[device]]
+name = "vce"
+kind = "pce.vce"
+domain = "main"
+
+[[device]]
+name = "psg"
+kind = "pce.psg"
+domain = "main"
+
+[[device]]
+name = "joypad"
+kind = "pce.joypad"
+domain = "main"
+
+[[device]]
+name = "ram0"
+kind = "pce.ram"
+domain = "main"
+[device.params]
+size = 8192
+
+[[device]]
+name = "cart"
+kind = "pce.cart"
+domain = "main"
+
+[[bus]]
+name = "cpu"
+address_bits = 21
+owner = "cpu0"
+
+# The HuCard spans the bank range the MPRs address; the image wraps
+# into its window, so smaller cards answer their whole range.
+[[window]]
+name = "w_card"
+bus = "cpu"
+device = "cart"
+base = "0x000000"
+size = "0x1EE000"
+
+# The work RAM at bank $F8: 8 KiB. The zero page and the stack views
+# come from the MPR1 routing, so the RAM keeps one window.
+[[window]]
+name = "w_ram"
+bus = "cpu"
+device = "ram0"
+base = "0x1F0000"
+size = "0x002000"
+
+# The hardware I/O page at bank $FF. The physical base of bank $FF is
+# $1FE000, and the offsets follow the published register map. The VCE
+# palette's direct read window lives in the free expansion segment
+# past $1FF800: an emulation face for the raster pipeline, not a
+# hardware form; the CPU's real path to the palette keeps the register
+# protocol.
+[[window]]
+name = "w_vdc"
+bus = "cpu"
+device = "vdc"
+base = "0x1FE000"
+size = "0x0004"
+
+[[window]]
+name = "w_vce_regs"
+bus = "cpu"
+device = "vce"
+base = "0x1FE400"
+size = "0x0008"
+
+[[window]]
+name = "w_vce_palette"
+bus = "cpu"
+device = "vce"
+base = "0x1FF800"
+size = "0x0400"
+
+[[window]]
+name = "w_psg"
+bus = "cpu"
+device = "psg"
+base = "0x1FE800"
+size = "0x0400"
+
+[[window]]
+name = "w_joypad"
+bus = "cpu"
+device = "joypad"
+base = "0x1FF000"
+size = "0x0400"
+
+# The VDC interrupts ride the IRQ1 line of the on-chip controller, with
+# the timer source staying internal to the chip.
+[[connection]]
+from = "vdc.irq"
+to = "cpu0.irq1"
+semantics = "irq"
+
+[boot.ram0]
+pattern = "zero"
+
+# The VCE palette's direct window exists only for the raster pipeline;
+# the HuCard keeps no mapper registers in this build.
