@@ -1,0 +1,378 @@
+# Neo Geo AES, the canonical system configuration.
+#
+# One 24 MHz master crystal (the published MAME clock form): the 68000
+# runs at /2 on the `m68k` domain, the Z80 at /6 on the `z80` domain,
+# the LSPC pixel at /4, and the YM2610's FM engine at /3. The two
+# domains stay separate declarations of the one crystal: the 68000
+# view paces on `m68k`, and the sound view on `z80`.
+#
+# The memory map follows the published AES form as separate chips: the
+# P ROM's fixed bank at $000000-$0FFFFF with the banked window at
+# $200000-$2FFFFF (the bank latch lives in the window's last bytes per
+# the MAME bankswitch form), the work RAM at $100000-$10FFFF (mirrored
+# through $1FFFFF), the IO die at $300000-$3BFFFF, the LSPC register
+# page at $3C0000-$3FFFFF, the banked palette at $400000-$401FFF
+# (mirrored to $7FFFFF), and the system BIOS at $C00000-$C1FFFF
+# (mirrored to $C7FFFF). The MVS-only backup RAM and the memory card
+# window stay out of the AES map.
+#
+# The Z80 map: the M1 ROM's static bank at $0000-$7FFF, the four
+# banked windows ($8000-$BFFF, $C000-$DFFF, $E000-$EFFF,
+# $F000-$F7FF) latched through the read-side bank ports $08-$0B of
+# the Z80's io space (the high byte of the port address carries the
+# bank, per the MAME audio map), the work RAM at $F800-$FFFF, the
+# YM2610 ports at $04-$07, the sound-command latch at $00, the reply
+# latch at $0C, and the NMI enable/disable writes at $08/$18 sharing
+# the bank-port addresses through the per-direction overlay pair.
+#
+# The bundled boot runs the synthetic BIOS stub: the boot preset names
+# the supervisor stack pointer and the program counter; the vectors'
+# BIOS-mux form starts in the BIOS-vector position, and the program
+# parks. The watchdog arms at boot and kicks only when a program
+# opens the odd-lane watchdog door; the bundled park does not kick, so
+# the single watchdog pulse fires unwired and the run keeps its
+# in this build) and the run keeps its parked form.
+
+[system]
+name = "Neo Geo AES"
+triple = "m68000-neogeo-aes"
+description = "The Neo Geo AES with the 68000 and the Z80 on two synchronous domains of one 24 MHz master, the LSPC video die, the banked palette, the two IO dies, the YM2610, and the P/S/C/V cartridge chips."
+
+[clock.m68k]
+frequency = "24000000"
+origin = "the published 24 MHz master crystal; the 68000 sits at /2 and the LSPC pixel at /4"
+
+[clock.z80]
+frequency = "24000000/6"
+origin = "the sound division of the master crystal; the Z80 runs at 4 MHz on its own domain"
+
+[[device]]
+name = "lspc"
+kind = "neogeo.lspc"
+domain = "m68k"
+[device.dividers]
+dot = 4
+[device.params]
+srom = "srom"
+crom = "crom"
+bus = "cpu"
+
+[[device]]
+name = "cpu0"
+kind = "m68000.cpu"
+domain = "m68k"
+[device.dividers]
+cpu = 2
+[device.params]
+bus = "cpu"
+
+[[device]]
+name = "soundcpu"
+kind = "z80.cpu"
+domain = "z80"
+[device.dividers]
+cpu = 1
+[device.params]
+bus = "sound"
+io_bus = "soundio"
+
+[[device]]
+name = "io"
+kind = "neogeo.io"
+domain = "m68k"
+[device.dividers]
+master = 1
+[device.params]
+sound_bus = "soundio"
+
+[[device]]
+name = "soundio"
+kind = "neogeo.soundio"
+domain = "z80"
+[device.params]
+main_bus = "cpu"
+
+[[device]]
+name = "palette"
+kind = "neogeo.palette"
+domain = "m68k"
+
+[[device]]
+name = "ym"
+kind = "ym2610.chip"
+domain = "m68k"
+[device.dividers]
+div = 432
+[device.params]
+adpcma = "adpcma"
+adpcmb = "adpcmb"
+
+[[device]]
+name = "wram"
+kind = "z80.ram"
+domain = "m68k"
+[device.params]
+size = 65536
+
+[[device]]
+name = "nzram"
+kind = "z80.ram"
+domain = "z80"
+[device.params]
+size = 2048
+
+[[device]]
+name = "bios"
+kind = "neogeo.rom"
+domain = "m68k"
+[device.params]
+size = 131072
+
+[[device]]
+name = "cart"
+kind = "neogeo.cart"
+domain = "m68k"
+[device.params]
+bios = "bios"
+
+[[device]]
+name = "srom"
+kind = "neogeo.rom"
+domain = "m68k"
+[device.params]
+size = 65536
+
+[[device]]
+name = "crom"
+kind = "neogeo.rom"
+domain = "m68k"
+[device.params]
+size = 1048576
+
+[[device]]
+name = "m1rom"
+kind = "neogeo.m1rom"
+domain = "z80"
+[device.params]
+size = 1048576
+
+[[device]]
+name = "adpcma"
+kind = "neogeo.rom"
+domain = "m68k"
+[device.params]
+size = 1048576
+
+[[device]]
+name = "adpcmb"
+kind = "neogeo.rom"
+domain = "m68k"
+[device.params]
+size = 65536
+
+[[bus]]
+name = "cpu"
+address_bits = 24
+owner = "cpu0"
+
+[[bus]]
+name = "sound"
+address_bits = 16
+owner = "soundcpu"
+
+[[bus]]
+name = "soundio"
+address_bits = 17
+owner = "soundcpu"
+
+[[window]]
+name = "w_prom"
+bus = "cpu"
+device = "cart"
+base = "0x000000"
+size = "0x100000"
+
+[[window]]
+name = "w_prom_banked"
+bus = "cpu"
+device = "cart"
+base = "0x200000"
+size = "0x100000"
+
+[[window]]
+name = "w_wram"
+bus = "cpu"
+device = "wram"
+base = "0x100000"
+size = "0x010000"
+mirror_stride = "0x010000"
+mirror_count = 15
+
+[[window]]
+name = "w_io"
+bus = "cpu"
+device = "io"
+base = "0x300000"
+size = "0x0C0000"
+
+[[window]]
+name = "w_lspc"
+bus = "cpu"
+device = "lspc"
+base = "0x3C0000"
+size = "0x040000"
+
+[[window]]
+name = "w_palette"
+bus = "cpu"
+device = "palette"
+base = "0x400000"
+size = "0x002000"
+mirror_stride = "0x002000"
+mirror_count = 511
+
+[[window]]
+name = "w_bios"
+bus = "cpu"
+device = "bios"
+base = "0xC00000"
+size = "0x020000"
+mirror_stride = "0x020000"
+mirror_count = 3
+
+# The Z80 memory bus: the static M1 bank, the four banked windows,
+# and the work RAM.
+[[window]]
+name = "w_m1_static"
+bus = "sound"
+device = "m1rom"
+base = "0x0000"
+size = "0x008000"
+
+[[window]]
+name = "w_m1_bank3"
+bus = "sound"
+device = "m1rom"
+base = "0x8000"
+size = "0x004000"
+
+[[window]]
+name = "w_m1_bank2"
+bus = "sound"
+device = "m1rom"
+base = "0xC000"
+size = "0x002000"
+
+[[window]]
+name = "w_m1_bank1"
+bus = "sound"
+device = "m1rom"
+base = "0xE000"
+size = "0x001000"
+
+[[window]]
+name = "w_m1_bank0"
+bus = "sound"
+device = "m1rom"
+base = "0xF000"
+size = "0x000800"
+
+[[window]]
+name = "w_nz_ram"
+bus = "sound"
+device = "nzram"
+base = "0xF800"
+size = "0x000800"
+
+# The Z80 io space: the ports sit at the io form's $10000 base. The
+# sound latch reads and clears at $00, the YM2610 answers $04-$07,
+# the reply latch at $0C, and the bank ports' reads at $08-$0B share
+# the NMI-enable write at $08 through the per-direction overlay pair.
+[[window]]
+name = "w_nz_latch"
+bus = "soundio"
+device = "soundio"
+base = "0x10000"
+size = "0x0001"
+
+[[window]]
+name = "w_ym_ports"
+bus = "soundio"
+device = "ym"
+base = "0x10004"
+size = "0x0004"
+
+[[window]]
+name = "w_m1_banks"
+bus = "soundio"
+device = "m1rom"
+base = "0x10008"
+size = "0x0004"
+overlay = "nz_sound_ctl"
+overlay_read_priority = 2
+overlay_write_priority = 0
+
+[[window]]
+name = "w_nz_nmi_enable"
+bus = "soundio"
+device = "soundio"
+base = "0x10008"
+size = "0x0001"
+overlay = "nz_sound_ctl"
+overlay_read_priority = 0
+overlay_write_priority = 2
+
+[[window]]
+name = "w_nz_reply"
+bus = "soundio"
+device = "soundio"
+base = "0x1000C"
+size = "0x0001"
+
+[[window]]
+name = "w_nz_nmi_disable"
+bus = "soundio"
+device = "soundio"
+base = "0x10018"
+size = "0x0001"
+
+# The interrupts: the LSPC's vertical blank rides the level-one IPL
+# line and the raster timer the level-two one; the YM2610's timer
+# rides the Z80's interrupt line. The palette bank and the BIOS
+# vector mux travel over the io die's output-register lines.
+[[connection]]
+from = "lspc.irq1"
+to = "cpu0.ipl0"
+semantics = "irq"
+
+[[connection]]
+from = "lspc.irq2"
+to = "cpu0.ipl1"
+semantics = "irq"
+
+[[connection]]
+from = "ym.irq"
+to = "soundcpu.int"
+semantics = "async-port"
+
+[[connection]]
+from = "io.palbank"
+to = "palette.palbank"
+semantics = "display-sync"
+
+[[connection]]
+from = "io.vecbios"
+to = "cart.vecbios"
+semantics = "display-sync"
+
+[boot.cpu0]
+registers = { ssp = "0x0010F300", sr = "0x2700", pc = "0xC00000" }
+
+[boot.bios]
+hex = "60fe"
+
+[boot.wram]
+pattern = "zero"
+
+[boot.nzram]
+pattern = "zero"

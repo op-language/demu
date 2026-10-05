@@ -3686,3 +3686,316 @@ pub mod z80_machine_tests {
         assert_eq!(again, check, "the two restores continue identically");
     }
 }
+
+/// The 68000 machine group: the Mega Drive views, end to end over the
+/// machine assembly.
+#[cfg(test)]
+pub mod genesis_machine_tests {
+    use crate::assemble;
+    use demu_core::Device;
+    use demu_core::Tick;
+    use demu_core::machine::Machine;
+
+    /// Assemble and boot one machine from a bundled triple, with the
+    /// test image as the positional cart form.
+    fn machine_for(triple: &str, cart: Option<Vec<u8>>) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, warnings) = demu_config::validate(&raw).expect("config is valid");
+        for w in warnings {
+            eprintln!("warning: {} - {}", w.code, w.message);
+        }
+        let mut machine =
+            Machine::assemble(config, &assemble::demu_ctors()).expect("machine assembles");
+        if let Some(bytes) = cart {
+            machine
+                .override_boot("cart", demu_config::model::BootState::Hex { bytes })
+                .expect("boot cart");
+        }
+        machine.boot();
+        machine
+    }
+
+    /// A Mega Drive cart: the reset vectors name the program at $200
+    /// and the program parks in a two-byte self branch.
+    fn genesis_cart() -> Vec<u8> {
+        let mut rom = vec![0xFFu8; 0x40000];
+        // The initial supervisor stack pointer and program counter.
+        rom[0..8].copy_from_slice(&[0x01, 0x02, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00]);
+        // The SEGA MEGA DRIVE header pad, then the park at $200.
+        rom[0x200] = 0x60; // BRA.S over itself
+        rom[0x201] = 0xFE;
+        // The sound program region: the mapper's boot ROM form answers
+        // the first 2K of the cart image at the sound bus; the stub
+        // parks too (the machine's own boot hex handles it).
+        rom
+    }
+
+    fn m68k_registers(machine: &Machine) -> std::collections::BTreeMap<String, u64> {
+        machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers()
+    }
+
+    #[test]
+    fn both_views_declare_the_published_clocks() {
+        let machine = machine_for("m68000-sega-genesis", None);
+        assert_eq!(machine.scheduler.primary_name(), "m68k");
+        let m = machine.config.clocks["m68k"].frequency.num();
+        assert_eq!(m, 53693175);
+        assert_eq!(machine.config.clocks["m68k"].frequency.den(), 1);
+        // The sound division reduces to the integer Z80 crystal.
+        assert_eq!(machine.config.clocks["z80"].frequency.num(), 3579545);
+        assert_eq!(machine.config.clocks["z80"].frequency.den(), 1);
+        let machine = machine_for("z80-sega-genesis", None);
+        assert_eq!(
+            machine.scheduler.primary_name(),
+            "sound",
+            "the sound view paces on the Z80"
+        );
+    }
+
+    #[test]
+    fn the_68000_parks_at_the_cart_program() {
+        let mut machine = machine_for("m68000-sega-genesis", Some(genesis_cart()));
+        machine.run_until(Tick(2_000_000));
+        let regs = m68k_registers(&machine);
+        assert!(
+            (0x200..=0x202).contains(&(regs["PC"] as u16 as u32)),
+            "the core parks at the cart program, pc={:#06x}",
+            regs["PC"]
+        );
+    }
+
+    #[test]
+    fn the_sound_core_boots_the_mapper_stub_and_parks() {
+        let mut machine = machine_for("m68000-sega-genesis", Some(genesis_cart()));
+        machine.run_until(Tick(2_000_000));
+        let zpc = machine
+            .device_by_name("soundcpu")
+            .and_then(|d| d.cpu())
+            .expect("sound cpu")
+            .registers();
+        assert_eq!(zpc["PC"], 0x3, "the stub's park lands on the JR");
+    }
+
+    /// The arbiter handoff: the 68000's bus request stops the sound
+    /// core and the grant bit reads active low; the release wakes it.
+    #[test]
+    fn the_arbiter_handoff_holds_and_releases_the_sound_core() {
+        let mut machine = machine_for("m68000-sega-genesis", Some(genesis_cart()));
+        machine.run_until(Tick(1_000_000));
+        // The Z80 sound core is parked in its boot stub.
+        let running = machine
+            .device_by_name_mut("soundcpu")
+            .and_then(|d| d.as_any_mut().downcast_mut::<demu_cpu_z80::CpuDevice>())
+            .map(|d| match d {
+                demu_cpu_z80::CpuDevice::Z80(z) => !z.stalled && z.next_event().is_some(),
+            })
+            .expect("sound cpu");
+        assert!(running, "the sound core runs its stub before the handoff");
+
+        // The published request: $0100 = the bus request.
+        assert!(machine.debug_write("cpu", demu_core::Address(0xA1_1100), 0x01));
+        machine.run_until(Tick(1_100_000));
+        let held = machine
+            .device_by_name_mut("soundcpu")
+            .and_then(|d| d.as_any_mut().downcast_mut::<demu_cpu_z80::CpuDevice>())
+            .map(|d| match d {
+                demu_cpu_z80::CpuDevice::Z80(z) => z.stalled,
+            })
+            .expect("sound cpu");
+        assert!(held, "the request stalls the sound core");
+        // The grant bit reads active low.
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xA1_1100)), 0x00);
+
+        // The release write (bit 0 clear) wakes the parked core.
+        assert!(machine.debug_write("cpu", demu_core::Address(0xA1_1100), 0x00));
+        machine.run_until(Tick(1_200_000));
+        let released = machine
+            .device_by_name_mut("soundcpu")
+            .and_then(|d| d.as_any_mut().downcast_mut::<demu_cpu_z80::CpuDevice>())
+            .map(|d| match d {
+                demu_cpu_z80::CpuDevice::Z80(z) => !z.stalled && z.next_event().is_some(),
+            })
+            .expect("sound cpu");
+        assert!(released, "the release wakes the sound core");
+        // The released grant bit reads high again (the arbiter's
+        // active-low grant form).
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0xA1_1100)),
+            0x01,
+            "the grant bit releases to the inactive-high form"
+        );
+    }
+
+    #[test]
+    fn the_mega_drive_runs_deterministically_and_restores() {
+        let cart = genesis_cart();
+        let mut machine = machine_for("m68000-sega-genesis", Some(cart.clone()));
+        machine.run_until(Tick(1_500_000));
+        // The arbiter's request stands mid-run: the save carries it.
+        assert!(machine.debug_write("cpu", demu_core::Address(0xA1_1100), 0x01));
+        machine.run_until(Tick(2_000_000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        // Two machines restored from the same save continue
+        // identically with the hold standing.
+        let mut twin_a = machine_for("m68000-sega-genesis", Some(cart.clone()));
+        twin_a.load(&buf).expect("load a");
+        let mut twin_b = machine_for("m68000-sega-genesis", Some(cart.clone()));
+        twin_b.load(&buf).expect("load b");
+        twin_a.run_until(Tick(3_000_000));
+        twin_b.run_until(Tick(3_000_000));
+        let mut again = Vec::new();
+        twin_a.save(&mut again).expect("save a");
+        let mut check = Vec::new();
+        twin_b.save(&mut check).expect("save b");
+        assert_eq!(again, check, "the two restores continue identically");
+    }
+}
+
+/// The Neo Geo AES machine group: the 68000 view and the sound view
+/// over the machine assembly.
+#[cfg(test)]
+pub mod neogeo_machine_tests {
+    use crate::assemble;
+    use demu_core::Tick;
+    use demu_core::machine::Machine;
+
+    /// Assemble and boot one machine from a bundled triple, with the
+    /// P ROM image as the positional cart form.
+    fn machine_for(triple: &str, prom: Option<Vec<u8>>) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, warnings) = demu_config::validate(&raw).expect("config is valid");
+        for w in warnings {
+            eprintln!("warning: {} - {}", w.code, w.message);
+        }
+        let mut machine =
+            Machine::assemble(config, &assemble::demu_ctors()).expect("machine assembles");
+        if let Some(bytes) = prom {
+            machine
+                .override_boot("cart", demu_config::model::BootState::Hex { bytes })
+                .expect("boot cart");
+        }
+        machine.boot();
+        machine
+    }
+
+    /// A two-MiB P ROM: the first MiB carries the park form at its
+    /// start (the vectors stay informational in the preset form), the
+    /// second MiB carries a marker byte at its start for the banked
+    /// window.
+    fn neogeo_prom() -> Vec<u8> {
+        let mut rom = vec![0xFFu8; 2 * 0x100000];
+        rom[0x000] = 0x60; // BRA.S over itself, the park form
+        rom[0x001] = 0xFE;
+        rom[0x100000] = 0xA5; // The second MiB's marker byte
+        rom
+    }
+
+    fn m68k_registers(machine: &Machine) -> std::collections::BTreeMap<String, u64> {
+        machine
+            .device_by_name("cpu0")
+            .and_then(|d| d.cpu())
+            .expect("cpu")
+            .registers()
+    }
+
+    #[test]
+    fn the_aes_boots_to_the_bios_park() {
+        let mut machine = machine_for("m68000-neogeo-aes", Some(neogeo_prom()));
+        machine.run_until(Tick(9_000_000));
+        let regs = m68k_registers(&machine);
+        assert!(
+            (0xC00000..=0xC00004).contains(&regs["PC"]),
+            "the bios stub parks, pc={:#08x}",
+            regs["PC"]
+        );
+        // The LSPC publishes frames over the parked run: the 264-line
+        // NTSC frame over the 24 MHz master's /2 runs about 24 frames
+        // in this window.
+        let frames = machine
+            .device_by_name("lspc")
+            .and_then(|d| d.video())
+            .map(|v| v.frames())
+            .expect("lspc");
+        assert!(frames > 10, "frames={frames}");
+    }
+
+    #[test]
+    fn the_sound_view_paces_on_the_z80_and_reads_the_sound_bus_by_default() {
+        let machine = machine_for("z80-neogeo-aes", None);
+        assert_eq!(machine.scheduler.primary_name(), "z80");
+        assert_eq!(machine.primary_bus(), Some("sound"));
+        // The shell's registers command reads the first cpu device,
+        // which the sound view declares as the Z80.
+        let regs = machine
+            .devices
+            .iter()
+            .find_map(|d| d.cpu())
+            .expect("a cpu")
+            .registers();
+        assert!(regs.contains_key("PC"), "the z80 reports its registers");
+    }
+
+    #[test]
+    fn controller_injection_reaches_the_published_bits() {
+        let mut machine = machine_for("m68000-neogeo-aes", None);
+        {
+            let Some(io) = machine.device_by_name_mut("io") else {
+                panic!("io exists");
+            };
+            let sink = io.input_mut().expect("input sink");
+            assert!(sink.inject("p1 press 8"));
+        }
+        // A pressed button reads as a cleared bit in the active-low
+        // form: bit 3 (Right) reads low, the rest read high.
+        let byte = machine.peek("cpu", demu_core::Address(0x300000));
+        assert_eq!(
+            byte, 0xF7,
+            "the pressed bit 3 reads low and the idle bits read high"
+        );
+    }
+
+    #[test]
+    fn the_sound_latch_crosses_and_the_reply_returns() {
+        let mut machine = machine_for("m68000-neogeo-aes", Some(neogeo_prom()));
+        // The 68k writes a command byte and the Z80 writes a reply
+        // through its port form. Both crossings arm one die tick
+        // after the write; issuing both before the long run keeps
+        // both arms inside the run's real-time window (the sound die
+        // sits on the slower Z80 domain, so an arm written after the
+        // run began would name a tick past the run's end).
+        assert!(machine.debug_write("cpu", demu_core::Address(0x320000), 0x42));
+        assert!(machine.debug_write("soundio", demu_core::Address(0x1000C), 0x77));
+        machine.run_until(Tick(2_000_000));
+        let latch = machine.peek("soundio", demu_core::Address(0x10000));
+        assert_eq!(latch, 0x42, "the command crossed to the sound side");
+        let reply = machine.peek("cpu", demu_core::Address(0x320000));
+        assert_eq!(reply, 0x77, "the reply crossed back to the 68k");
+    }
+
+    #[test]
+    fn the_machine_runs_deterministically_and_restores() {
+        let prom = neogeo_prom();
+        let mut machine = machine_for("m68000-neogeo-aes", Some(prom.clone()));
+        machine.run_until(Tick(2_000_000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        // Two machines restored from the same save continue
+        // identically.
+        let mut twin_a = machine_for("m68000-neogeo-aes", Some(prom.clone()));
+        twin_a.load(&buf).expect("load a");
+        let mut twin_b = machine_for("m68000-neogeo-aes", Some(prom.clone()));
+        twin_b.load(&buf).expect("load b");
+        twin_a.run_until(Tick(3_000_000));
+        twin_b.run_until(Tick(3_000_000));
+        let mut again = Vec::new();
+        twin_a.save(&mut again).expect("save a");
+        let mut check = Vec::new();
+        twin_b.save(&mut check).expect("save b");
+        assert_eq!(again, check, "the two restores continue identically");
+    }
+}

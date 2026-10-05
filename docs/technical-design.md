@@ -1140,3 +1140,260 @@ assets: the ZEXALL and ZEXDOC instruction suites, the per-VDP and
 per-system test-ROM screens, the Sinclair real-BIOS contention
 check, the ZX80/ZX81 real-BIOS boot screens, and the TI-85 real-ROM
 boot.
+
+
+## 25. As-built notes: 68000 dual-CPU machines
+
+### The borrowed-decoder route
+
+The core's `BusAccess` carries a `borrow(address)` decision beside
+`decodes(address)`. A window device that composes a cross-bus access
+itself answers `Borrow::Bridge` with the borrowed bus name and the
+translated address; the visit context re-decodes the access on that
+bus and the answering device there serves it. The route is the
+as-built form of the DMA-parented bus of section 5.2: no
+configuration surface exists for it, because the composing device
+behaves like a bus owner, not like a second bus. A loop of bridges
+stops at the depth cap of four and the access answers nothing. The
+machine-level debug reader and writer follow the same route, so
+`peek` and `debug_write` cross a bridge the same way the run does.
+
+### Mega Drive clocking
+
+The two domains: `m68k` at 53693175 Hz (the NTSC master crystal) and
+`z80` at `53693175/15` Hz (the published sound division). The 68000
+declares the `cpu` divider 7; the VDP counts master ticks (`dot` 1).
+A scanline takes exactly 3420 master clocks; the published line and
+frame forms live with the VDP device notes. The Z80 core declares
+`cpu` divider 1 on its own domain, since the domain tick is the Z80
+clock. A PAL machine swaps the master crystal to 53203424 Hz and sets
+the VDP's `region` parameter.
+
+### The bus arbiter and the bank mapper
+
+- `genesis.arbiter` answers the control trio on the 68000 bus at
+  \$A11000 (the memory mode, bit 0: 0 the boot ROM form, 1 the RAM
+  form), \$A11100 (the bus request: the write with bit 0 clear
+  registers the request, the grant lands on the arbiter's next tick
+  visit, and the read's grant bit is active low; the write with bit 0
+  set releases), and \$A11200 (a write with bit 0 clear pulses the
+  sound core's reset and re-runs its power-on form). The arbiter
+  drives `stall` high while the request stands and low on release,
+  and pulses `zreset`; both route to the sound core over declared
+  connections with `async-port` semantics, the DSL's cross-domain
+  form.
+- `genesis.mapper` owns the 8 KiB of sound RAM and the 2 KiB boot ROM
+  image (the image loads through the mapper's own boot state; the
+  published board form places the image there). The sound bus's
+  \$0000-\$1FFF window answers the RAM with the boot ROM image over
+  the first 2 KiB while the memory mode reads 0, and the RAM itself
+  in mode 1. The \$6000-\$7FFF window carries the nine-bit
+  shift-register bank. The \$8000-\$FFFF window borrows the 68000
+  bus's decoder in 32-KiB pages through the bank register. The
+  68000-side window at \$A00000-\$A03FFF answers the sound RAM view
+  (with the \$2000 mirror) directly, so the mapper owns both views.
+- The `genesis.io` die answers \$A10000-\$A100FF: the version cell
+  and the three port cells with the TH-direction split; the shell
+  injects events with the `port <n> press|lift <bits>` form.
+
+### Genesis window map
+
+The 68000 bus: the cart at \$000000-\$3FFFFF, the VDP at
+\$C00000-\$C0000F, the PSG at \$C00010-\$C0001F, the sound RAM
+view at \$A00000-\$A03FFF, the YM2612 at \$A04000-\$A05FFF, the IO
+die at \$A10000-\$A100FF, the arbiter trio at \$A11000-\$A113FF,
+and the work RAM at \$E00000-\$FFFFFF (the 64-KiB block mirrored
+on the \$10000 stride). The sound bus: the mapper's RAM/ROM form at
+\$0000-\$1FFF, the YM2612 ports at
+\$4000-\$5FFF, the bank page at \$6000-\$7FFF, the PSG's port
+window over \$7F10-\$7F1F, and the banked window at
+\$8000-\$FFFF.
+
+### Interrupt wiring
+
+The 68000 decodes its interrupt level from three open-collector IPL
+lines that follow the machine's high-assert convention: the level's
+binary digits are the asserted lines. The VDP drives the level-6 line
+to IPL bits one and two, the level-4 interval line to bit two, and
+the level-2 feed and the YM2612's timer interrupt to bit one; the Z80
+receives its own vblank feed on its `int` line. The sources that
+share a bit pull the same open-collector line exactly like the
+wired-OR interrupt pins of the real machine.
+
+### Boot forms
+
+The 68000 view boots through the boot-state register preset naming
+the supervisor stack pointer and the program counter (the reset
+exception's vector fetch stays outside this build; the cart's vector
+longwords at \$000000/\$000004 are informational in bundled
+machines). The Z80 view boots into the mapper's boot ROM form and
+runs its stub; the sound view's configuration names the sound domain
+first, so the scheduler's primary domain is the sound crystal and the
+run commands pace on the Z80.
+
+### Pending evidence
+
+Per the precedent every machine family before this one set, the
+following remain pending a follow-up evidence pass with real ROM
+assets: the 68000 instruction-suite runs, the YM2612 and YM2610
+register-image captures, the VDP golden screenshots from real titles,
+the BIOS checksum runs, and the bus-arbiter timing cross-check
+against a hardware capture.
+
+
+### The 68000 core
+
+The core runs one instruction per visit with per-access stamps; the
+published Appendix B totals ride the access flow. The effective
+address walks the extension words with the published signed-index and
+PC-relative forms; the predecrement store folds through the
+per-size-lane rules. The exception frame pushes the 32-bit program
+counter first, then the 16-bit status word (the Musashi-pinned
+three-word short form), so the frame reads $SP+0 = status, $SP+2 =
+the return address; RTE and RTR pull through the same form. Illegal,
+privilege, and the unimplemented-line entries stack the faulting
+instruction's own address; trace, TRAP, TRAPV, CHK, the divide
+entries, and the interrupt stack the advanced address. The address
+error uses vector 3. The interrupt entry pays 44 clocks with the
+internal acknowledge and installs the serviced level's mask. The
+divide and multiply walk the published bounds (140/158 and 70+).
+The reset exception's vector fetch stays outside this build: the
+machine's boot preset names the supervisor stack pointer and the
+program counter. The three IPL lines are open-collector; the decode
+of the level reads the asserted lines as its binary digits, so the
+machines wire or share sources per bit exactly like the real
+interrupt pins. A cross-domain edge carries the sender's tick stamp;
+the core's wake lands at the next CPU boundary after it, which
+overshoots on a slower receiving domain by construction of the stamp
+(recorded for the arbiter handoff as a first-build latency form, not
+a determinism form: the handoff stays exact and byte-stable).
+
+### The Genesis VDP
+
+The VDP counts 3420 master clocks per scanline in both horizontal
+modes (H32: 342 dots at /10; H40: 390 dots at /8 plus 30 at /10), the
+published line form. The HV counter readback carries the pinned
+Nemesis/Kabuto spans with the two-dot H40 form ($00-$B5, $B6 and $E4
+one dot each, $E5-$FF), the V-increment boundaries at slots 266/330,
+and the PAL line-progress jump tables. The control port runs the
+two-word command form with the pending flag; byte writes enter both
+lanes; the CRAM and VSRAM reads fold, the VRAM byte read answers the
+odd-lane swap form; register writes cancel the pending form and clear
+the code register. The read-back of registers rides the 11-prefix
+command and aborts on the second word. The status word carries the
+published bits 0-9. The DMA forms: the 68k transfer at 16/167
+(H32) and 18/205 (H40) bytes per line over the word rates for the
+CRAM and VSRAM, the fill at 15/166 and 17/204 with the high-byte
+form, the copy at 8/83 and 9/102; the zero length reads $10000. The
+fill and copy seize the 68000 through the hold line in place of the
+hardware port restriction. The render walks the plane ladder with
+the window union clipping, the column VSRAM pairs, the column-major
+tile walk, the raw-X-zero mask, the overflow at the 20/320 and 16/256
+line caps, and the shadow/highlight operators with the BlastEm
+$3E/$3F form (the MacDonald v1.5f swap is recorded as the
+divergence). The CRAM's 9-bit channels expand with the published
+(v<<5)|(v<<2)|(v>>1) form; the shadow halves and the highlight adds
+128 to the staged channel.
+
+### The Neo Geo dies
+
+The LSPC runs 384 pixels per line at /4 of the master (6 MHz), the
+published line form, over 264 (NTSC) or 312 (PAL) lines; the palette
+window and its mirrors span $400000-$7FFFFF. The register page
+decodes on bits 1-3; the VRAM address carries its own zone rule (the
+auto-increment keeps the zone bit and wraps inside the zone), the
+signed modulo walks backwards, and a data write refills the read
+buffer. The sprite walk follows the SCB1-SCB4 layout with the stick
+chain, the 96-entry per-line list with the zero tail, the chained
+strip's X advance, and the L0-table vertical shrink (the tables are
+generated from the published subsample semantics: the real $000-lo.lo
+data stays a ROM dump and is recorded as the LSPC evidence gap). The
+C ROM decode implements the published 128-byte tile interleave; the
+FIX layer walks column-major from $7000 with the palette in the word's
+top four bits, first 16 palettes, and the published 32-byte tile
+form. The palette chip answers the selected bank's word forms; byte
+lanes stay unmapped (the published word-only rule); the last word is
+the backdrop index. The vblank interrupt asserts at line 240 (NTSC)
+and clears through $3C000C; the raster timer counts pixel clocks with
+the published reload forms.
+
+The 68k IO die follows the MAME AES maps: the controllers read
+active-low with the Up/Down/Left/Right/A/B/C/D bit order at the even
+lanes of $300000-$31FFFF and $340000-$35FFFF, the watchdog arms at
+boot and re-arms per odd-lane kick with the published 3,244,030-tick
+deadline, $320000 carries the sound latch (byte = the command form,
+word = the reply crossing), $320001 reads the AES status-A zero form,
+$380000 reads $7F idle, and the odd outputs $3A0001-$3A001F store
+their latch bytes: $3A001F selects palette bank 1 (high), $3A000F
+selects bank 0, and $3A0003/$3A0013 drive the BIOS-vector mux line.
+The MVS-only backup RAM, RTC, and memory card stay out of the AES
+map by design.
+
+The sound die reads its command latch at io port $00 (the write
+clears it and drops a pending NMI pulse), the YM2610 owns $04-$07,
+the reply latch stores at $0C and crosses with a one-tick delay, and
+the NMI enable/disable writes share the $08/$18 ports with the M1
+bank reads through the per-direction overlay: MAME's audio map puts
+the bank select on the read side, with the port address's high byte
+carrying the bank, and the NMI form on the write side. The M1 ROM's
+static bank reads $0000-$7FFF and its four banked windows read at
+2/4/8/16-KiB granularity through the latched banks, all zero at
+reset.
+
+### The YM2610
+
+The chip follows the landed OPNB form: four FM channels of four
+operators at the published port split (the A1 bank bit selects the
+SSG/ADPCM-B/FM-common/ch1-2 map on port A and the ADPCM-A/ch3-4 map
+on port B), the die-verified operator addressing (OP1, OP3, OP2, OP4
+at $x1/$x5/$x9/$xD for channels 1 and 2, and the mirrored pair for
+channels 3 and 4), the key-on channel codes 001/010/101/110, the
+high-register-first frequency latch, and the special-mode pair map
+with OP4 keeping the channel's own pair. The status 0 byte carries
+the busy and both timer flags; the status 1 byte carries the ADPCM-B
+end bit and the six ADPCM-A channel-end flags with the mask form of
+$1C. The SSG block follows the YM2149 equations at 32 chip clocks
+per tick with the published mono mix form. The ADPCM-A engine runs
+six channels at 18.5 kHz (one nibble per third FM sample) with the
+wrapping 12-bit accumulator, and the ADPCM-B engine runs the variable
+rate with the 16-bit delta fraction. A data write raises busy for 83
+chip clocks. The FM sample lands every 144 chip clocks; on the 24 MHz
+master the machine's divider is 432.
+
+### Known first-build approximations
+
+- The debug-write and debug-read paths stamp accesses with the
+  primary domain's tick; a device on a secondary domain converts the
+  arm from the received stamp. A machine-level test that writes a
+  secondary-domain device after a long run arms past the run's end:
+  issue debug writes before the run. A future pass converts the debug
+  stamps cross-domain at the decode point.
+- The reset exception's vector fetch stays out of the 68000 build;
+  the bundled boots preset the core directly.
+- The arbiter's cross-domain wake overshoots (see the 68000 core
+  notes); the handoff form stays deterministic and byte-stable.
+- The LSPC's vertical-shrink tables are generated; the timer's lap
+  fires at line-granular visits carrying the exact published
+  one-pixel decrement.
+- The VDP's DMA budget uses the published per-line byte rates; the
+  FIFO's full/empty flags ride the queued forms.
+- The YM2610's mono downmix averages the two pan sums (a single-pan
+  channel renders at half level), recorded as the house audio form.
+
+### Recorded divergences of the first build
+
+- The 68k IO die decodes its three port cells by the address's low
+  bits, so even control addresses inside a port cell answer the data
+  form; the pad data registers read correctly at the addresses real
+  titles use.
+- The V-ROM chip has no sprite-decode window: the LSPC's C-ROM
+  interleave reads the C ROM directly, and the V ROM feeds only the
+  YM2610's ADPCM engines. The published Neo Geo cart separates C and
+  V banks per game; a per-cart banking pass is pending evidence.
+- The data-source exemption of the fabric check is a broad heuristic:
+  any device's string parameter naming another device clears the
+  orphan rule; a later pass can restrict it to the kinds' known
+  data-source keys.
+- The M1 bank ports map four bytes at the io spaces 08-0B without the
+  MAME mirror form, so drivers that bank through the port address's
+  high byte stay pending the real-ROM evidence pass.

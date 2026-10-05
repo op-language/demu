@@ -124,7 +124,7 @@ impl Device for CpuDevice {
 }
 
 /// The control lines the core answers.
-pub const CONTROL_LINES: &[&str] = &["nmi", "int", "contend_page"];
+pub const CONTROL_LINES: &[&str] = &["nmi", "int", "contend_page", "stall", "reset"];
 
 /// The line the core drives while a HALT parks it.
 pub const DRIVEN_LINES: &[&str] = &["halt"];

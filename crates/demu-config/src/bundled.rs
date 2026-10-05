@@ -100,6 +100,18 @@ pub const SPECTRUM128: &str = include_str!("../../../configs/z80-sinclair-spectr
 /// The Texas Instruments TI-85.
 pub const TI85: &str = include_str!("../../../configs/z80-ti-85.toml");
 
+/// The Sega Mega Drive, the 68000 view.
+pub const GENESIS_68K: &str = include_str!("../../../configs/m68000-sega-genesis.toml");
+
+/// The Sega Mega Drive, the sound view.
+pub const GENESIS_Z80: &str = include_str!("../../../configs/z80-sega-genesis.toml");
+
+/// The Neo Geo AES, the 68000 view.
+pub const NEOGEO_68K: &str = include_str!("../../../configs/m68000-neogeo-aes.toml");
+
+/// The Neo Geo AES, the sound view.
+pub const NEOGEO_Z80: &str = include_str!("../../../configs/z80-neogeo-aes.toml");
+
 /// A bundled config source: the triple name and the embedded text.
 pub struct BundledConfig {
     /// The triple name that selects this config.
@@ -229,6 +241,22 @@ pub const BUNDLED: &[BundledConfig] = &[
     BundledConfig {
         triple: "z80-ti-85",
         text: TI85,
+    },
+    BundledConfig {
+        triple: "m68000-sega-genesis",
+        text: GENESIS_68K,
+    },
+    BundledConfig {
+        triple: "z80-sega-genesis",
+        text: GENESIS_Z80,
+    },
+    BundledConfig {
+        triple: "m68000-neogeo-aes",
+        text: NEOGEO_68K,
+    },
+    BundledConfig {
+        triple: "z80-neogeo-aes",
+        text: NEOGEO_Z80,
     },
 ];
 

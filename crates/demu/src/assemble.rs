@@ -15,6 +15,8 @@ use demu_core::device::Device;
 use demu_core::machine::{DeviceCtors, MachineError};
 use demu_cpu_huc6280::CpuDevice as HucCpuDevice;
 use demu_cpu_huc6280::Huc6280;
+use demu_cpu_m68000::CpuDevice as M68kCpuDevice;
+use demu_cpu_m68000::M68000;
 use demu_cpu_mos65sc02::CpuDevice as Sc02CpuDevice;
 use demu_cpu_mos65sc02::Mos65Sc02;
 use demu_cpu_sm83::CpuDevice as Sm83CpuDevice;
@@ -28,9 +30,14 @@ use demu_dev_audio::IigsDoc;
 use demu_dev_audio::NesApu;
 use demu_dev_audio::PcePsg;
 use demu_dev_audio::Sn76489;
+use demu_dev_audio::Ym2610;
+use demu_dev_audio::Ym2612;
 use demu_dev_audio::apu::Apu as SnesApu;
 use demu_dev_cartridge::Cart;
+use demu_dev_cartridge::GenesisCart;
 use demu_dev_cartridge::LynxCart;
+use demu_dev_cartridge::NeoCart;
+use demu_dev_cartridge::NeoM1Rom;
 use demu_dev_cartridge::NesCart;
 use demu_dev_cartridge::PceCart;
 use demu_dev_cartridge::SegaCart;
@@ -38,21 +45,27 @@ use demu_dev_cartridge::SnesCart;
 use demu_dev_dma::{Hdma, OamDma, SnesSys};
 use demu_dev_io::Iwm;
 use demu_dev_io::LynxMikey;
+use demu_dev_io::NeoIo;
+use demu_dev_io::NeoSoundIo;
 use demu_dev_io::PceTurbotap;
 use demu_dev_io::SegaIo;
 use demu_dev_io::Ti85Mem;
 use demu_dev_io::ZxUla;
+use demu_dev_io::genesis::{GenesisArbiter, GenesisIo, GenesisMapper};
 use demu_dev_io::{Io, Joypad, Mega2, SnesPad};
+use demu_dev_memory::NeoPalette;
 use demu_dev_memory::StaticRam;
 use demu_dev_memory::{Bootrom, Hram, Wram};
 use demu_dev_memory::{LynxBootrom, LynxMapCtl};
 use demu_dev_memory::{Z80BankRom, ZxBankRam};
 use demu_dev_serial::Ti85Link;
+use demu_dev_video::NeoLspc;
 use demu_dev_video::NesPpu;
 use demu_dev_video::Ppu;
 use demu_dev_video::SnesPpu;
 use demu_dev_video::Ti85Lcd;
 use demu_dev_video::Vdp;
+use demu_dev_video::genesis::GenesisVdp;
 use demu_dev_video::lynx::LynxSuzy;
 use demu_dev_video::pce::{PceVce, PceVdc};
 
@@ -69,7 +82,10 @@ pub const ATARI_CART_KINDS: &[&str] = &["atari.cart2600", "atari.cart5200", "ata
 pub const SNES_CART_KINDS: &[&str] = &["snes.cart"];
 
 /// The Z80 family cartridge kinds.
-pub const SEGA_CART_KINDS: &[&str] = &["sega.cart"];
+pub const SEGA_CART_KINDS: &[&str] = &["sega.cart", "genesis.cart"];
+
+/// The Neo Geo family cartridge kind.
+pub const NEO_CART_KINDS: &[&str] = &["neogeo.cart"];
 
 /// True for a device kind that carries the cartridge image.
 pub fn is_cart_kind(kind: &str) -> bool {
@@ -78,6 +94,7 @@ pub fn is_cart_kind(kind: &str) -> bool {
         || ATARI_CART_KINDS.contains(&kind)
         || SNES_CART_KINDS.contains(&kind)
         || SEGA_CART_KINDS.contains(&kind)
+        || NEO_CART_KINDS.contains(&kind)
 }
 
 /// The NES cartridge and pixel-processing-unit coupling: the mirror
@@ -194,6 +211,21 @@ pub fn demu_ctors() -> DeviceCtors {
     ctors.register("sms.vdp", Box::new(new_sms_vdp));
     ctors.register("gg.vdp", Box::new(new_gg_vdp));
     ctors.register("sn76489.psg", Box::new(new_sn76489));
+    ctors.register("genesis.vdp", Box::new(new_genesis_vdp));
+    ctors.register("genesis.arbiter", Box::new(new_genesis_arbiter));
+    ctors.register("genesis.io", Box::new(new_genesis_io));
+    ctors.register("genesis.mapper", Box::new(new_genesis_mapper));
+    ctors.register("genesis.cart", Box::new(new_genesis_cart));
+    ctors.register("ym2612.psg", Box::new(new_ym2612));
+    ctors.register("ym2610.chip", Box::new(new_ym2610));
+    ctors.register("m68000.cpu", Box::new(new_m68k_cpu));
+    ctors.register("neogeo.lspc", Box::new(new_neogeo_lspc));
+    ctors.register("neogeo.palette", Box::new(new_neogeo_palette));
+    ctors.register("neogeo.cart", Box::new(new_neogeo_cart));
+    ctors.register("neogeo.io", Box::new(new_neogeo_io));
+    ctors.register("neogeo.soundio", Box::new(new_neogeo_soundio));
+    ctors.register("neogeo.m1rom", Box::new(new_neogeo_m1rom));
+    ctors.register("neogeo.rom", Box::new(new_neogeo_rom));
     ctors.register("sega.io", Box::new(new_sega_io));
     ctors.register("sega.cart", Box::new(new_sega_cart));
     ctors.register("zx.ula", Box::new(new_zx_ula));
@@ -728,6 +760,127 @@ fn new_sn76489(
     _config: &demu_config::model::SystemConfig,
 ) -> Result<Box<dyn Device>, MachineError> {
     Ok(Box::new(Sn76489::new(device)))
+}
+
+fn new_genesis_vdp(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let vdp = GenesisVdp::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(vdp))
+}
+
+fn new_genesis_arbiter(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let arbiter = GenesisArbiter::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(arbiter))
+}
+
+fn new_genesis_io(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let io = GenesisIo::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(io))
+}
+
+fn new_genesis_mapper(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let mapper = GenesisMapper::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(mapper))
+}
+
+fn new_genesis_cart(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let cart = GenesisCart::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(cart))
+}
+
+fn new_ym2612(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let chip = Ym2612::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(chip))
+}
+
+fn new_m68k_cpu(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(M68kCpuDevice::M68k(M68000::new(device, config))))
+}
+
+fn new_ym2610(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let chip = Ym2610::new(device, config).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(chip))
+}
+
+fn new_neogeo_lspc(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let die = NeoLspc::new(device, config).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(die))
+}
+
+fn new_neogeo_palette(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let palette =
+        NeoPalette::new(device, config).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(palette))
+}
+
+fn new_neogeo_cart(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let cart = NeoCart::new(device, config).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(cart))
+}
+
+fn new_neogeo_io(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let io = NeoIo::new(device, config).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(io))
+}
+
+fn new_neogeo_soundio(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let sound = NeoSoundIo::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(sound))
+}
+
+fn new_neogeo_m1rom(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let rom = NeoM1Rom::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(rom))
+}
+
+fn new_neogeo_rom(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let mut rom = StaticRam::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    rom.set_readonly(true);
+    Ok(Box::new(rom))
 }
 
 fn new_sega_io(

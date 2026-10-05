@@ -1,0 +1,265 @@
+# Sega Mega Drive (Genesis), the sound view: the canonical system
+# configuration for debugging the sound program.
+#
+# The sound core and its bus declare first: the shell's registers and
+# memory commands default to the first CPU device and the first bus.
+# The machine wiring matches the 68000 view: the same devices, buses,
+# windows, and connections. The only form differences are the clock
+# declarations: the Z80's domain names first in the configuration, so
+# the scheduler's primary domain is the sound crystal and the run
+# commands pace on the Z80's ticks, and the sound core's boot presets
+# point its program counter at the mapper's boot ROM stub the way the
+# 68000 view's cart does for the main program. The 68000 stays in the
+# machine and keeps the same wiring; a session that debugs the sound
+# program reads its registers, memory, and the YM2612 and PSG forms
+# without leaving this view.
+
+[system]
+name = "Sega Mega Drive (sound view)"
+triple = "z80-sega-genesis"
+description = "The Sega Mega Drive sound view: the Z80 sound program on the primary domain over the same machine wiring as the 68000 view."
+
+[clock.sound]
+frequency = "53693175/15"
+origin = "the sound division of the master crystal; the Z80 free-runs on its own domain and the run commands pace here"
+
+[clock.zmain]
+frequency = "53693175"
+origin = "the NTSC master crystal; the 68000 sits at /7 and the VDP counts master ticks"
+
+[[device]]
+name = "soundcpu"
+kind = "z80.cpu"
+domain = "sound"
+[device.dividers]
+cpu = 1
+[device.params]
+bus = "sound"
+
+[[device]]
+name = "cpu0"
+kind = "m68000.cpu"
+domain = "zmain"
+[device.dividers]
+cpu = 7
+[device.params]
+bus = "cpu"
+
+[[device]]
+name = "vdp"
+kind = "genesis.vdp"
+domain = "zmain"
+[device.dividers]
+dot = 1
+[device.params]
+bus = "cpu"
+
+[[device]]
+name = "arbiter"
+kind = "genesis.arbiter"
+domain = "zmain"
+
+[[device]]
+name = "io"
+kind = "genesis.io"
+domain = "zmain"
+
+[[device]]
+name = "mapper"
+kind = "genesis.mapper"
+domain = "zmain"
+[device.params]
+main_bus = "cpu"
+
+[[device]]
+name = "ym"
+kind = "ym2612.psg"
+domain = "zmain"
+[device.dividers]
+psg = 1008
+
+[[device]]
+name = "psg"
+kind = "sn76489.psg"
+domain = "zmain"
+
+[[device]]
+name = "wram"
+kind = "z80.ram"
+domain = "zmain"
+[device.params]
+size = 65536
+
+[[device]]
+name = "cart"
+kind = "genesis.cart"
+domain = "zmain"
+[device.params]
+sram = 8192
+
+[[bus]]
+name = "sound"
+address_bits = 16
+owner = "soundcpu"
+
+[[bus]]
+name = "cpu"
+address_bits = 24
+owner = "cpu0"
+
+[[window]]
+name = "w_cart"
+bus = "cpu"
+device = "cart"
+base = "0x000000"
+size = "0x400000"
+
+[[window]]
+name = "w_wram"
+bus = "cpu"
+device = "wram"
+base = "0xE00000"
+size = "0x010000"
+mirror_stride = "0x010000"
+mirror_count = 31
+
+[[window]]
+name = "w_vdp"
+bus = "cpu"
+device = "vdp"
+base = "0xC00000"
+size = "0x000010"
+
+[[window]]
+name = "w_psg_68k"
+bus = "cpu"
+device = "psg"
+base = "0xC00010"
+size = "0x000010"
+
+[[window]]
+name = "w_io"
+bus = "cpu"
+device = "io"
+base = "0xA10000"
+size = "0x000100"
+
+[[window]]
+name = "w_arbiter"
+bus = "cpu"
+device = "arbiter"
+base = "0xA11000"
+size = "0x000400"
+
+[[window]]
+name = "w_sound_ram_view"
+bus = "cpu"
+device = "mapper"
+base = "0xA00000"
+size = "0x002000"
+mirror_stride = "0x002000"
+mirror_count = 1
+
+[[window]]
+name = "w_ym_68k"
+bus = "cpu"
+device = "ym"
+base = "0xA04000"
+size = "0x002000"
+
+[[window]]
+name = "w_sound_mem"
+bus = "sound"
+device = "mapper"
+base = "0x0000"
+size = "0x002000"
+
+[[window]]
+name = "w_sound_ym"
+bus = "sound"
+device = "ym"
+base = "0x4000"
+size = "0x002000"
+
+[[window]]
+name = "w_sound_bank"
+bus = "sound"
+device = "mapper"
+base = "0x6000"
+size = "0x002000"
+
+[[window]]
+name = "w_sound_psg"
+bus = "sound"
+device = "psg"
+base = "0x7F10"
+size = "0x000010"
+overlay = "sound_psg"
+overlay_read_priority = 2
+overlay_write_priority = 2
+
+[[window]]
+name = "w_sound_mapped"
+bus = "sound"
+device = "mapper"
+base = "0x8000"
+size = "0x008000"
+
+[[connection]]
+from = "vdp.int6"
+to = "cpu0.ipl1"
+semantics = "irq"
+
+[[connection]]
+from = "vdp.int6"
+to = "cpu0.ipl2"
+semantics = "irq"
+
+[[connection]]
+from = "vdp.int4"
+to = "cpu0.ipl2"
+semantics = "irq"
+
+[[connection]]
+from = "vdp.int2"
+to = "cpu0.ipl1"
+semantics = "irq"
+
+[[connection]]
+from = "ym.irq"
+to = "cpu0.ipl1"
+semantics = "irq"
+
+[[connection]]
+from = "vdp.zint"
+to = "soundcpu.int"
+semantics = "async-port"
+
+[[connection]]
+from = "arbiter.stall"
+to = "soundcpu.stall"
+semantics = "async-port"
+
+[[connection]]
+from = "arbiter.zreset"
+to = "soundcpu.reset"
+semantics = "async-port"
+
+[[connection]]
+from = "vdp.hold"
+to = "cpu0.dma_hold"
+semantics = "dma-request"
+
+[quirks]
+
+[boot.cpu0]
+registers = { ssp = "0x01020200", pc = "0x00000200" }
+
+[boot.soundcpu]
+registers = { pc = "0x0000" }
+
+[boot.mapper]
+hex = "f3ed5e18fe"
+
+[boot.wram]
+pattern = "zero"

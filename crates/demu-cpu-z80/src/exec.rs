@@ -15,9 +15,10 @@
 //! The undocumented forms run when the `undocumented` quirk flag is
 //! set: the index-register halves (IXH, IXL, IYH, IYL), the SLL
 //! shift, the `OUT (C),0` port store, the `IN (C)` flag-only input,
-//! and the index-register IN and OUT forms. With the flag clear the
-//! forms run effect-free with the same timing, with the index halves
-//! reading as zero.
+//! and the index-register IN and OUT forms. The ED 70/71 pair runs
+//! only with the flag and falls to the unknown-form 8 T-state
+//! fallback when it is clear; the index halves read as zero with
+//! the flag clear.
 //!
 //! The flag bits 3 and 5 copy the result or operand bits where the
 //! NMOS core copies them: arithmetic results, bit tests of
@@ -51,6 +52,11 @@ use demu_core::triggers::TriggerEvent;
 /// transition, so the ULA of the ZX81 watches the parked core and
 /// takes over the display line while the core is down.
 pub fn step(cpu: &mut Z80, tick: Tick, ctx: &mut MachineCtx) {
+    if cpu.stalled {
+        // The arbiter owns the bus; nothing runs until it drops.
+        cpu.next = None;
+        return;
+    }
     let was = cpu.halted;
     {
         let mut bus = Access::for_cpu(cpu, tick, ctx);
@@ -1234,12 +1240,14 @@ fn exec_ed<C: Cycles>(cpu: &mut Z80, bus: &mut C) {
                 bus.wr_io(u16::from(cpu.regs.b) << 8 | u16::from(cpu.regs.c), v);
             }
         }
-        0x71 => {
-            // The undocumented zero store runs only with the quirk.
-            if cpu.undocumented {
-                bus.wr_io(u16::from(cpu.regs.b) << 8 | u16::from(cpu.regs.c), 0);
-            }
+        // OUT (C),0: the undocumented zero store. Only with the
+        // quirk; without it the pair falls to the unknown-form
+        // fallback.
+        0x71 if cpu.undocumented => {
+            bus.wr_io(u16::from(cpu.regs.b) << 8 | u16::from(cpu.regs.c), 0);
         }
+        // The undocumented pair without the quirk: effect-free.
+        0x70 | 0x71 => {}
         // SBC HL,ss and ADC HL,ss (15 T-states).
         0x42 | 0x52 | 0x62 | 0x72 | 0x4A | 0x5A | 0x6A | 0x7A => {
             bus.wait(7);

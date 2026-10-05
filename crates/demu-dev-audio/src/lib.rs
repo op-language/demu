@@ -18,6 +18,8 @@ pub mod pce;
 pub mod pokey;
 pub mod sid;
 pub mod sn76489;
+pub mod ym2610;
+pub mod ym2612;
 
 pub use dsp::Sdsp;
 pub use iigsdoc::IigsDoc;
@@ -26,6 +28,8 @@ pub use pce::PcePsg;
 pub use pokey::Pokey;
 pub use sid::Sid;
 pub use sn76489::Sn76489;
+pub use ym2610::Ym2610;
+pub use ym2612::Ym2612;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};

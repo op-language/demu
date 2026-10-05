@@ -216,6 +216,50 @@ pub trait BusAccess {
         let _ = address;
         true
     }
+
+    /// The borrow decision of the access at `address`.
+    ///
+    /// Most devices answer locally. A device whose window borrows the
+    /// address decoder of another bus returns [`Borrow::Bridge`]: the
+    /// context re-decodes the access on the borrowed bus at the
+    /// translated address and the answering device there serves it,
+    /// exactly like the design's DMA-parented bus form for a device
+    /// that composes a cross-bus address itself.
+    fn borrow(&self, address: crate::frequency::Address) -> Borrow {
+        let _ = address;
+        Borrow::Local
+    }
+}
+
+/// The borrow decision of one target device for one access.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Borrow {
+    /// The device answers the access at the address itself.
+    Local,
+    /// The device composes a translated address on another bus; the
+    /// context re-decodes the access there and that device answers.
+    Bridge {
+        /// The borrowed bus name.
+        bus: String,
+        /// The translated address on the borrowed bus.
+        address: u32,
+    },
+}
+
+/// The deepest borrow hop the context follows for one access.
+///
+/// A chain this deep means the machine's window wiring loops back on
+/// itself; the access answers nothing after that point.
+pub const MAX_BORROW_DEPTH: u8 = 4;
+
+/// The routed-write hop: the target bus and the transfer form, plus
+/// the entry address the trigger event carries.
+struct WriteHop<'x> {
+    bus_name: &'x str,
+    width: AccessWidth,
+    value: u32,
+    tick: Tick,
+    entry: crate::frequency::Address,
 }
 
 /// A resolved address window.
@@ -508,9 +552,41 @@ impl<'a> MachineCtx<'a> {
         tick: Tick,
     ) -> u32 {
         self.emit(crate::triggers::TriggerEvent::Read(address));
+        self.route_read(bus_name, width, address, tick, 0)
+    }
+
+    fn route_read(
+        &mut self,
+        bus_name: &str,
+        width: AccessWidth,
+        address: crate::frequency::Address,
+        tick: Tick,
+        depth: u8,
+    ) -> u32 {
         let Some((slot, _offset)) = self.pick(bus_name, address, false) else {
             return 0xFF;
         };
+        let borrow = {
+            let Some(device) = self.device(slot) else {
+                return 0xFF;
+            };
+            let Some(bus) = device.bus() else {
+                return 0xFF;
+            };
+            bus.borrow(address)
+        };
+        if let Borrow::Bridge { bus, address } = borrow {
+            if depth >= MAX_BORROW_DEPTH {
+                return 0xFF;
+            }
+            return self.route_read(
+                &bus,
+                width,
+                crate::frequency::Address(address),
+                tick,
+                depth + 1,
+            );
+        }
         let Some(device) = self.device_mut(slot) else {
             return 0xFF;
         };
@@ -529,24 +605,76 @@ impl<'a> MachineCtx<'a> {
         value: u32,
         tick: Tick,
     ) {
-        let Some((slot, _offset)) = self.pick(bus_name, address, true) else {
+        // The write trigger event names the entry address like the
+        // read one does: triggers watch the address the accessing CPU
+        // composed, not the address a bridge translates it to.
+        let hop = WriteHop {
+            bus_name,
+            width,
+            value,
+            tick,
+            entry: address,
+        };
+        self.route_write(&hop, address, 0)
+    }
+
+    fn route_write(&mut self, hop: &WriteHop, address: crate::frequency::Address, depth: u8) {
+        let Some((slot, _offset)) = self.pick(hop.bus_name, address, true) else {
             return;
         };
-        self.emit(crate::triggers::TriggerEvent::Write(address));
-        let Some(device) = self.device_mut(slot) else {
-            return;
+        let borrow = {
+            let Some(device) = self.device(slot) else {
+                return;
+            };
+            let Some(bus) = device.bus() else {
+                return;
+            };
+            bus.borrow(address)
         };
-        let Some(bus) = device.bus_mut() else {
-            return;
-        };
-        bus.write(width, address, value, tick);
+        match borrow {
+            Borrow::Bridge { bus: _, address } if depth < MAX_BORROW_DEPTH => {
+                self.route_write(hop, crate::frequency::Address(address), depth + 1);
+            }
+            // A borrow loop or an exhausted depth: the write lands
+            // nowhere.
+            Borrow::Bridge { .. } => {}
+            Borrow::Local => {
+                self.emit(crate::triggers::TriggerEvent::Write(hop.entry));
+                let Some(device) = self.device_mut(slot) else {
+                    return;
+                };
+                let Some(bus) = device.bus_mut() else {
+                    return;
+                };
+                bus.write(hop.width, address, hop.value, hop.tick);
+            }
+        }
     }
 
     /// A side-effect-free read on the named bus.
     pub fn peek(&mut self, bus_name: &str, address: crate::frequency::Address) -> u8 {
+        self.route_peek(bus_name, address, 0)
+    }
+
+    fn route_peek(&mut self, bus_name: &str, address: crate::frequency::Address, depth: u8) -> u8 {
         let Some((slot, _offset)) = self.pick(bus_name, address, false) else {
             return 0xFF;
         };
+        let borrow = {
+            let Some(device) = self.device(slot) else {
+                return 0xFF;
+            };
+            let Some(bus) = device.bus() else {
+                return 0xFF;
+            };
+            bus.borrow(address)
+        };
+        if let Borrow::Bridge { bus, address } = borrow {
+            if depth >= MAX_BORROW_DEPTH {
+                return 0xFF;
+            }
+            return self.route_peek(&bus, crate::frequency::Address(address), depth + 1);
+        }
         let Some(device) = self.device(slot) else {
             return 0xFF;
         };

@@ -653,8 +653,9 @@ fn check_semantic(raw: &RawConfig, partial: Option<&PartialConfig>, errors: &mut
         }
     }
 
-    // Every device must take part in the bus fabric: through a window that
-    // maps it, or by owning a bus (the CPU role).
+    // Every device must take part in the bus fabric: through a window
+    // that maps it, by owning a bus (the CPU role), or by being named
+    // in another device's parameters (the die-read data chips).
     for (name, _) in &partial.devices {
         let mapped = raw.window.iter().any(|w| {
             DeviceName::new(&w.device)
@@ -668,7 +669,7 @@ fn check_semantic(raw: &RawConfig, partial: Option<&PartialConfig>, errors: &mut
                 .as_ref()
                 == Some(name)
         });
-        if !mapped && !owns {
+        if !mapped && !owns && !device_named_in_params(raw, name) {
             errors.push(ConfigError::DeviceOffBus(name.to_string()));
         }
     }
@@ -730,12 +731,31 @@ fn triple_cpu_prefix(triple: &str) -> String {
 ///
 /// The PC Engine triple names the 6502 family but the machine carries
 /// the Hudson Soft HuC6280 die, so the config names the real chip kind
-/// while the triple keeps the compatibility form.
+/// while the triple keeps the compatibility form. The dual-CPU
+/// machines (the Mega Drive and the Neo Geo AES) carry both the 68000
+/// and the Z80 cores in either view of the machine.
 fn triple_cpu_exception(triple: &str) -> Option<&'static [&'static str]> {
     match triple {
         "mos6502-nec-pcengine" => Some(&["huc6280"]),
+        "m68000-sega-genesis" | "z80-sega-genesis" | "m68000-neogeo-aes" | "z80-neogeo-aes" => {
+            Some(&["m68000", "z80"])
+        }
         _ => None,
     }
+}
+
+/// True when some other device's parameter names this device: the
+/// data chips a die reads through its parameters (the video die's ROM
+/// sources, the sound chip's sample images) take part in the fabric
+/// without owning a window.
+fn device_named_in_params(raw: &RawConfig, name: &DeviceName) -> bool {
+    raw.device.iter().any(|d| {
+        d.name.as_str() != name.as_str()
+            && d.params.values().any(|v| {
+                v.as_str()
+                    .is_some_and(|s| DeviceName::new(s).as_ref() == Ok(name))
+            })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -766,7 +786,7 @@ fn check_lint(raw: &RawConfig, config: &SystemConfig) -> Vec<LintWarning> {
                 .as_ref()
                 == Some(&device.name)
         });
-        if !mapped && !owns {
+        if !mapped && !owns && !device_named_in_params(raw, &device.name) {
             warnings.push(LintWarning {
                 code: "orphan_device".into(),
                 message: format!("device '{}' has no window on any bus", device.name),

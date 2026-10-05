@@ -36,6 +36,7 @@ dependencies = [
  "demu-config",
  "demu-core",
  "demu-cpu-huc6280",
+ "demu-cpu-m68000",
  "demu-cpu-mos6502",
  "demu-cpu-mos65sc02",
  "demu-cpu-sm83",
@@ -70,6 +71,7 @@ dependencies = [
  "demu-config",
  "rustc-hash",
  "thiserror",
+ "toml",
 ]
 
 [[package]]
@@ -83,6 +85,10 @@ dependencies = [
 [[package]]
 name = "demu-cpu-m68000"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+]
 
 [[package]]
 name = "demu-cpu-mos6502"

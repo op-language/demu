@@ -478,3 +478,14 @@ fn the_bundled_z80_configs_validate() {
         assert!(warnings.is_empty(), "{triple} raises lints: {warnings:?}");
     }
 }
+
+#[test]
+fn every_bundled_config_validates() {
+    use demu_config::bundled::BUNDLED;
+    for bundled in BUNDLED {
+        let raw = demu_config::bundled::resolve_source(bundled.triple)
+            .unwrap_or_else(|e| panic!("{} resolves: {e}", bundled.triple));
+        demu_config::validate(&raw)
+            .unwrap_or_else(|report| panic!("{} validates: {:?}", bundled.triple, report.errors));
+    }
+}

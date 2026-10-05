@@ -1553,11 +1553,15 @@ fn a_machine_boot_reschedules_past_the_reset() {
     assert!(saved.starts_with(b"Z80A"));
     assert_eq!(
         saved.len(),
-        78,
+        79,
         "the empty-range, anchorless form stays at its documented size"
     );
     let mut twin = Z80::new(&config.devices[0].clone(), &config);
     twin.restore(&saved).expect("the chunk restores");
     assert!(twin.reset_pending);
-    assert_eq!(twin.next_event(), None, "a restored core re-seeds");
+    assert_eq!(
+        twin.next_event(),
+        Some(Tick(0)),
+        "a restored core schedules past its reset"
+    );
 }

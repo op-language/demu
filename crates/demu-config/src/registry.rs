@@ -341,6 +341,83 @@ pub fn core_registry() -> &'static KindRegistry {
         r.register(KindInfo::new("ti85.mem", DomainRequirement::Required, &[]));
         r.register(KindInfo::new("ti85.lcd", DomainRequirement::Required, &[]));
         r.register(KindInfo::new("ti85.link", DomainRequirement::Required, &[]));
+        // The 68000 family: the core, the Genesis machines (the VDP,
+        // the support silicon, and the cart), and the YM sound chips.
+        r.register(KindInfo::new(
+            "m68000.cpu",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "genesis.vdp",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "genesis.arbiter",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "genesis.io",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "genesis.mapper",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "genesis.cart",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "ym2612.psg",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "ym2610.chip",
+            DomainRequirement::Required,
+            &[],
+        ));
+        // The Neo Geo family: the video die, the palette chip, the
+        // cart's P chip, the two IO dies, the M1 sound program ROM,
+        // and the generic read-only form for the S/C/V image chips
+        // the video and sound dies read through their parameters.
+        r.register(KindInfo::new(
+            "neogeo.lspc",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "neogeo.palette",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "neogeo.cart",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new("neogeo.io", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new(
+            "neogeo.soundio",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "neogeo.m1rom",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "neogeo.rom",
+            DomainRequirement::Required,
+            &[],
+        ));
         r
     })
 }

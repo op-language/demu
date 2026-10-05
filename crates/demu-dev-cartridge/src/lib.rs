@@ -12,14 +12,18 @@
 //! stored but do not tick.
 
 pub mod atari;
+pub mod genesis;
 pub mod lynx;
+pub mod neogeo;
 pub mod nes;
 pub mod pce;
 pub mod sega;
 pub mod snes;
 
 pub use atari::{Atari2600Cart, Atari5200Cart, Atari7800Cart};
+pub use genesis::GenesisCart;
 pub use lynx::LynxCart;
+pub use neogeo::{NeoCart, NeoM1Rom};
 pub use nes::{NesCart, NesHeader, NesMapper};
 pub use pce::PceCart;
 pub use sega::SegaCart;

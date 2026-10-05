@@ -7,12 +7,14 @@
 pub mod bank_ram;
 pub mod bank_rom;
 pub mod lynx;
+pub mod neogeo;
 pub mod sneswram;
 mod static_ram;
 
 pub use bank_ram::ZxBankRam;
 pub use bank_rom::Z80BankRom;
 pub use lynx::{LynxBootrom, LynxMapCtl};
+pub use neogeo::NeoPalette;
 pub use sneswram::SnesWram;
 pub use static_ram::StaticRam;
 

@@ -3,7 +3,8 @@
 //! SNES S-PPU1/PPU2, the Atari Lynx Suzy die, the PC Engine
 //! HuC6270 Video Display Controller with its HuC6260 Video Color
 //! Encoder, the TMS9918A family display processor with the Sega mode-4
-//! descendants, and the TI-85 liquid-crystal display driver.
+//! descendants, the Sega Genesis 315-5313 Video Display Processor, the
+//! Neo Geo LSPC video die, and the TI-85 liquid-crystal display driver.
 //!
 //! The SM83 pixel processing unit walks one dot per domain tick,
 //! 70224 dots per frame across 154 lines. Modes 2, 3, and 0 share the
@@ -15,6 +16,8 @@
 
 pub mod antic;
 pub mod apple;
+pub mod genesis;
+pub mod lspc;
 pub mod lynx;
 pub mod maria;
 pub mod nes;
@@ -27,6 +30,8 @@ pub mod vic;
 
 pub use antic::Antic;
 pub use apple::AppleVideo;
+pub use genesis::GenesisVdp;
+pub use lspc::NeoLspc;
 pub use lynx::LynxSuzy;
 pub use maria::Maria;
 pub use nes::NesPpu;

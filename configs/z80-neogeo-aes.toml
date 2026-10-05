@@ -1,0 +1,363 @@
+# Neo Geo AES, the sound view: the canonical system configuration for
+# debugging the sound program.
+#
+# The machine wiring matches the 68000 view: the same devices, buses,
+# windows, and connections. The sound view names the Z80's domain
+# first, so the scheduler's primary domain is the sound crystal and
+# the run commands pace on the Z80. The shell's registers and memory
+# commands default to the sound die and the sound bus. The 68000
+# stays in the machine with its own wiring; a session that debugs the
+# YM2610, the M1 bank layout, or the sound latch flow does so without
+# leaving this view.
+#
+# One 24 MHz master crystal (the published MAME clock form). The 68000
+# runs at /2 on its domain, the Z80 at /6 on the `z80` domain, the
+# LSPC pixel at /4, and the YM2610's FM engine at /3. The two domains
+# stay separate declarations of the one crystal.
+#
+# The published memory map follows the AES form as separate chips; the
+# Z80 map: the M1 ROM's static bank at $0000-$7FFF, the four banked
+# windows ($8000-$BFFF, $C000-$DFFF, $E000-$EFFF, $F000-$F7FF)
+# latched through the read-side bank ports $08-$0B of the io space
+# (the high byte of the port address carries the bank), the work RAM
+# at $F800-$FFFF, the YM2610 ports at $04-$07, the sound-command
+# latch at $00, the reply latch at $0C, and the NMI enable/disable
+# writes at $08/$18 sharing the bank-port addresses through the
+# per-direction overlay pair.
+
+[system]
+name = "Neo Geo AES (sound view)"
+triple = "z80-neogeo-aes"
+description = "The Neo Geo AES sound view: the Z80 sound program on the primary domain over the same machine wiring as the 68000 view."
+
+[clock.z80]
+frequency = "24000000/6"
+origin = "the sound division of the master crystal; the Z80 runs at 4 MHz on its own domain"
+
+[clock.zmain]
+frequency = "24000000"
+origin = "the published 24 MHz master crystal; the 68000 sits at /2 and the LSPC pixel at /4"
+
+[[device]]
+name = "soundcpu"
+kind = "z80.cpu"
+domain = "z80"
+[device.dividers]
+cpu = 1
+[device.params]
+bus = "sound"
+io_bus = "soundio"
+
+[[device]]
+name = "cpu0"
+kind = "m68000.cpu"
+domain = "zmain"
+[device.dividers]
+cpu = 2
+[device.params]
+bus = "cpu"
+
+[[device]]
+name = "lspc"
+kind = "neogeo.lspc"
+domain = "zmain"
+[device.dividers]
+dot = 4
+[device.params]
+srom = "srom"
+crom = "crom"
+bus = "cpu"
+
+[[device]]
+name = "io"
+kind = "neogeo.io"
+domain = "zmain"
+[device.dividers]
+master = 1
+[device.params]
+sound_bus = "soundio"
+
+[[device]]
+name = "soundio"
+kind = "neogeo.soundio"
+domain = "z80"
+[device.params]
+main_bus = "cpu"
+
+[[device]]
+name = "palette"
+kind = "neogeo.palette"
+domain = "zmain"
+
+[[device]]
+name = "ym"
+kind = "ym2610.chip"
+domain = "zmain"
+[device.dividers]
+div = 432
+[device.params]
+adpcma = "adpcma"
+adpcmb = "adpcmb"
+
+[[device]]
+name = "wram"
+kind = "z80.ram"
+domain = "zmain"
+[device.params]
+size = 65536
+
+[[device]]
+name = "nzram"
+kind = "z80.ram"
+domain = "z80"
+[device.params]
+size = 2048
+
+[[device]]
+name = "bios"
+kind = "neogeo.rom"
+domain = "zmain"
+[device.params]
+size = 131072
+
+[[device]]
+name = "cart"
+kind = "neogeo.cart"
+domain = "zmain"
+[device.params]
+bios = "bios"
+
+[[device]]
+name = "srom"
+kind = "neogeo.rom"
+domain = "zmain"
+[device.params]
+size = 65536
+
+[[device]]
+name = "crom"
+kind = "neogeo.rom"
+domain = "zmain"
+[device.params]
+size = 1048576
+
+[[device]]
+name = "m1rom"
+kind = "neogeo.m1rom"
+domain = "z80"
+[device.params]
+size = 1048576
+
+[[device]]
+name = "adpcma"
+kind = "neogeo.rom"
+domain = "zmain"
+[device.params]
+size = 1048576
+
+[[device]]
+name = "adpcmb"
+kind = "neogeo.rom"
+domain = "zmain"
+[device.params]
+size = 65536
+
+[[bus]]
+name = "sound"
+address_bits = 16
+owner = "soundcpu"
+
+[[bus]]
+name = "soundio"
+address_bits = 17
+owner = "soundcpu"
+
+[[bus]]
+name = "cpu"
+address_bits = 24
+owner = "cpu0"
+
+[[window]]
+name = "w_m1_static"
+bus = "sound"
+device = "m1rom"
+base = "0x0000"
+size = "0x008000"
+
+[[window]]
+name = "w_m1_bank3"
+bus = "sound"
+device = "m1rom"
+base = "0x8000"
+size = "0x004000"
+
+[[window]]
+name = "w_m1_bank2"
+bus = "sound"
+device = "m1rom"
+base = "0xC000"
+size = "0x002000"
+
+[[window]]
+name = "w_m1_bank1"
+bus = "sound"
+device = "m1rom"
+base = "0xE000"
+size = "0x001000"
+
+[[window]]
+name = "w_m1_bank0"
+bus = "sound"
+device = "m1rom"
+base = "0xF000"
+size = "0x000800"
+
+[[window]]
+name = "w_nz_ram"
+bus = "sound"
+device = "nzram"
+base = "0xF800"
+size = "0x000800"
+
+[[window]]
+name = "w_nz_latch"
+bus = "soundio"
+device = "soundio"
+base = "0x10000"
+size = "0x0001"
+
+[[window]]
+name = "w_ym_ports"
+bus = "soundio"
+device = "ym"
+base = "0x10004"
+size = "0x0004"
+
+[[window]]
+name = "w_m1_banks"
+bus = "soundio"
+device = "m1rom"
+base = "0x10008"
+size = "0x0004"
+overlay = "nz_sound_ctl"
+overlay_read_priority = 2
+overlay_write_priority = 0
+
+[[window]]
+name = "w_nz_nmi_enable"
+bus = "soundio"
+device = "soundio"
+base = "0x10008"
+size = "0x0001"
+overlay = "nz_sound_ctl"
+overlay_read_priority = 0
+overlay_write_priority = 2
+
+[[window]]
+name = "w_nz_reply"
+bus = "soundio"
+device = "soundio"
+base = "0x1000C"
+size = "0x0001"
+
+[[window]]
+name = "w_nz_nmi_disable"
+bus = "soundio"
+device = "soundio"
+base = "0x10018"
+size = "0x0001"
+
+[[window]]
+name = "w_prom"
+bus = "cpu"
+device = "cart"
+base = "0x000000"
+size = "0x100000"
+
+[[window]]
+name = "w_prom_banked"
+bus = "cpu"
+device = "cart"
+base = "0x200000"
+size = "0x100000"
+
+[[window]]
+name = "w_wram"
+bus = "cpu"
+device = "wram"
+base = "0x100000"
+size = "0x010000"
+mirror_stride = "0x010000"
+mirror_count = 15
+
+[[window]]
+name = "w_io"
+bus = "cpu"
+device = "io"
+base = "0x300000"
+size = "0x0C0000"
+
+[[window]]
+name = "w_lspc"
+bus = "cpu"
+device = "lspc"
+base = "0x3C0000"
+size = "0x040000"
+
+[[window]]
+name = "w_palette"
+bus = "cpu"
+device = "palette"
+base = "0x400000"
+size = "0x002000"
+mirror_stride = "0x002000"
+mirror_count = 511
+
+[[window]]
+name = "w_bios"
+bus = "cpu"
+device = "bios"
+base = "0xC00000"
+size = "0x020000"
+mirror_stride = "0x020000"
+mirror_count = 3
+
+[[connection]]
+from = "lspc.irq1"
+to = "cpu0.ipl0"
+semantics = "irq"
+
+[[connection]]
+from = "lspc.irq2"
+to = "cpu0.ipl1"
+semantics = "irq"
+
+[[connection]]
+from = "ym.irq"
+to = "soundcpu.int"
+semantics = "async-port"
+
+[[connection]]
+from = "io.palbank"
+to = "palette.palbank"
+semantics = "display-sync"
+
+[[connection]]
+from = "io.vecbios"
+to = "cart.vecbios"
+semantics = "display-sync"
+
+[boot.cpu0]
+registers = { ssp = "0x0010F300", sr = "0x2700", pc = "0xC00000" }
+
+[boot.soundcpu]
+registers = { pc = "0x0000" }
+
+[boot.bios]
+hex = "60fe"
+
+[boot.wram]
+pattern = "zero"
+
+[boot.nzram]
+pattern = "zero"

@@ -1,0 +1,277 @@
+# Sega Mega Drive (Genesis), the canonical system configuration.
+#
+# Two clock domains: the 68000 domain at 53693175 Hz with the CPU on
+# divider 7 and the VDP counting master ticks, and the Z80 domain at
+# the master divided by 15 (the 3579545 Hz sound crystal division).
+# The sound CPU runs on its own domain with its own bus; the bank
+# mapper's sound-side window borrows the 68000 bus's decoder for the
+# banked window accesses, and the bus arbiter holds the sound core
+# with the `stall` line while the 68000 owns the bus through the
+# control trio at $A11000/$A11100/$A11200.
+#
+# The 68000 boot presets the supervisor stack pointer and the program
+# counter (the cart's vector longwords at $000000/$000004 stay
+# informational in this build). The Z80 boots with no preset: its
+# power-on form runs the mapper's boot ROM image stub in the ROM
+# memory-mode form. The published memory mode 0 answers the boot ROM
+# form over the sound RAM's first 2 KiB; the sound program stores its
+# bank register writes through the mapped $6000 page of the shift
+# register.
+#
+# The published memory map: the cart at $000000-$3FFFFF, the sound RAM
+# view at $A00000 (mirrored), the YM2612 at $A04000, the IO die at
+# $A10000, the work RAM at $E00000 (mirrored), and the VDP at
+# $C00000-$C0001F.
+
+[system]
+name = "Sega Mega Drive"
+triple = "m68000-sega-genesis"
+description = "The Sega Mega Drive with the 68000 and the Z80 on separate domains, the VDP, the YM2612 and PSG pair, the bus arbiter, the sound bank mapper, and the cartridge."
+
+[clock.m68k]
+frequency = "53693175"
+origin = "the NTSC master crystal; the 68000 sits at /7 and the VDP counts master ticks"
+
+[clock.z80]
+frequency = "53693175/15"
+origin = "the sound division of the master crystal; the Z80 free-runs on its own domain"
+
+[[device]]
+name = "cpu0"
+kind = "m68000.cpu"
+domain = "m68k"
+[device.dividers]
+cpu = 7
+[device.params]
+bus = "cpu"
+
+[[device]]
+name = "soundcpu"
+kind = "z80.cpu"
+domain = "z80"
+[device.dividers]
+cpu = 1
+[device.params]
+bus = "sound"
+
+[[device]]
+name = "vdp"
+kind = "genesis.vdp"
+domain = "m68k"
+[device.dividers]
+dot = 1
+[device.params]
+bus = "cpu"
+
+[[device]]
+name = "arbiter"
+kind = "genesis.arbiter"
+domain = "m68k"
+
+[[device]]
+name = "io"
+kind = "genesis.io"
+domain = "m68k"
+
+[[device]]
+name = "mapper"
+kind = "genesis.mapper"
+domain = "m68k"
+[device.params]
+main_bus = "cpu"
+
+[[device]]
+name = "ym"
+kind = "ym2612.psg"
+domain = "m68k"
+[device.dividers]
+psg = 1008
+
+[[device]]
+name = "psg"
+kind = "sn76489.psg"
+domain = "m68k"
+
+[[device]]
+name = "wram"
+kind = "z80.ram"
+domain = "m68k"
+[device.params]
+size = 65536
+
+[[device]]
+name = "cart"
+kind = "genesis.cart"
+domain = "m68k"
+[device.params]
+sram = 8192
+
+[[bus]]
+name = "cpu"
+address_bits = 24
+owner = "cpu0"
+
+[[bus]]
+name = "sound"
+address_bits = 16
+owner = "soundcpu"
+
+[[window]]
+name = "w_cart"
+bus = "cpu"
+device = "cart"
+base = "0x000000"
+size = "0x400000"
+
+[[window]]
+name = "w_wram"
+bus = "cpu"
+device = "wram"
+base = "0xE00000"
+size = "0x010000"
+mirror_stride = "0x010000"
+mirror_count = 31
+
+[[window]]
+name = "w_vdp"
+bus = "cpu"
+device = "vdp"
+base = "0xC00000"
+size = "0x000010"
+
+[[window]]
+name = "w_psg_68k"
+bus = "cpu"
+device = "psg"
+base = "0xC00010"
+size = "0x000010"
+
+[[window]]
+name = "w_io"
+bus = "cpu"
+device = "io"
+base = "0xA10000"
+size = "0x000100"
+
+[[window]]
+name = "w_arbiter"
+bus = "cpu"
+device = "arbiter"
+base = "0xA11000"
+size = "0x000400"
+
+[[window]]
+name = "w_sound_ram_view"
+bus = "cpu"
+device = "mapper"
+base = "0xA00000"
+size = "0x002000"
+mirror_stride = "0x002000"
+mirror_count = 1
+
+[[window]]
+name = "w_ym_68k"
+bus = "cpu"
+device = "ym"
+base = "0xA04000"
+size = "0x002000"
+
+# The sound bus: the sound RAM form (the mapper overlays the boot ROM
+# image in the reset memory-mode form), the YM2612 port page, the bank
+# register page, and the banked window onto the 68000 bus.
+[[window]]
+name = "w_sound_mem"
+bus = "sound"
+device = "mapper"
+base = "0x0000"
+size = "0x002000"
+
+[[window]]
+name = "w_sound_ym"
+bus = "sound"
+device = "ym"
+base = "0x4000"
+size = "0x002000"
+
+[[window]]
+name = "w_sound_bank"
+bus = "sound"
+device = "mapper"
+base = "0x6000"
+size = "0x002000"
+
+[[window]]
+name = "w_sound_psg"
+bus = "sound"
+device = "psg"
+base = "0x7F10"
+size = "0x000010"
+overlay = "sound_psg"
+overlay_read_priority = 2
+overlay_write_priority = 2
+
+[[window]]
+name = "w_sound_mapped"
+bus = "sound"
+device = "mapper"
+base = "0x8000"
+size = "0x008000"
+
+# The interrupts: the VDP's level-6 and level-4 lines code the 68000's
+# IPL bits one and two, the level-2 feed and the YM2612's timer share
+# the level-two bit, and the Z80 keeps its own vblank feed. The
+# arbiter drives the stall hold and the reset pulse; the VDP's fill
+# and copy DMA seize the 68000 through the hold line.
+[[connection]]
+from = "vdp.int6"
+to = "cpu0.ipl1"
+semantics = "irq"
+
+[[connection]]
+from = "vdp.int6"
+to = "cpu0.ipl2"
+semantics = "irq"
+
+[[connection]]
+from = "vdp.int4"
+to = "cpu0.ipl2"
+semantics = "irq"
+
+[[connection]]
+from = "vdp.int2"
+to = "cpu0.ipl1"
+semantics = "irq"
+
+[[connection]]
+from = "ym.irq"
+to = "cpu0.ipl1"
+semantics = "irq"
+
+[[connection]]
+from = "vdp.zint"
+to = "soundcpu.int"
+semantics = "async-port"
+
+[[connection]]
+from = "arbiter.stall"
+to = "soundcpu.stall"
+semantics = "async-port"
+
+[[connection]]
+from = "arbiter.zreset"
+to = "soundcpu.reset"
+semantics = "async-port"
+
+[[connection]]
+from = "vdp.hold"
+to = "cpu0.dma_hold"
+semantics = "dma-request"
+
+[boot.cpu0]
+registers = { ssp = "0x01020200", pc = "0x00000200" }
+
+[boot.mapper]
+hex = "f3ed5e18fe"
+
+[boot.wram]
+pattern = "zero"

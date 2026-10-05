@@ -184,6 +184,9 @@ pub struct Z80 {
     /// The banked upper-RAM page of the 128K models is contended when
     /// the `contend_page` line reads high.
     pub(crate) contend_page: bool,
+    /// The `stall` line holds the core down between instructions; a
+    /// bus arbiter drives it while another processor owns the bus.
+    pub stalled: bool,
     pub(crate) next: Option<Tick>,
     last_tick: Option<Tick>,
 }
@@ -319,6 +322,7 @@ impl Z80 {
                 .unwrap_or(0),
             frame_anchor: None,
             contend_page: false,
+            stalled: false,
             next: None,
             last_tick: None,
         };
@@ -749,7 +753,7 @@ impl Device for Z80 {
     fn snapshot(&self) -> Snapshot {
         let mut out = Vec::with_capacity(64);
         out.extend_from_slice(b"Z80A");
-        out.push(1);
+        out.push(2);
         // The register file: the current file then the shadow file.
         out.extend_from_slice(&[
             self.regs.a,
@@ -803,6 +807,7 @@ impl Device for Z80 {
             }
             None => out.push(0),
         }
+        out.push(u8::from(self.stalled));
         out.push(self.mem_ranges.len() as u8);
         for (lo, hi) in &self.mem_ranges {
             out.extend_from_slice(&lo.to_le_bytes());
@@ -819,7 +824,9 @@ impl Device for Z80 {
     fn restore(&mut self, data: &[u8]) -> Result<(), SnapshotError> {
         // The minimum form with two range slots empty: 4 tag + 1
         // version + 18 registers + 8 pairs + 12 control bytes + 4 u64
-        // fields + 1 anchor flag + 1 range count + 1 range count.
+        // fields + 1 anchor flag + 1 range count + 1 range count. The
+        // stall flag of the version 2 chunks adds one byte before
+        // the range counts.
         if data.len() < 78 {
             return Err(SnapshotError::Mismatch(format!(
                 "z80 chunk must be at least 78 bytes, got {}",
@@ -829,7 +836,7 @@ impl Device for Z80 {
         if &data[..4] != b"Z80A" {
             return Err(SnapshotError::Mismatch("bad z80 tag".into()));
         }
-        if data[4] != 1 {
+        if data[4] != 1 && data[4] != 2 {
             return Err(SnapshotError::Mismatch(
                 "unsupported z80 chunk version".into(),
             ));
@@ -893,6 +900,9 @@ impl Device for Z80 {
         } else {
             None
         };
+        if data[4] == 2 {
+            self.stalled = next(1, &mut i)?[0] != 0;
+        }
         let mem_n = next(1, &mut i)?[0] as usize;
         self.mem_ranges.clear();
         for _ in 0..mem_n {
@@ -919,6 +929,12 @@ impl Device for Z80 {
         }
         self.next = None;
         self.last_tick = None;
+        // A restored core schedules at its own next boundary unless it
+        // is held down by the arbiter or is parked with nothing to
+        // accept; a line wake re-seeds a parked core in the machine.
+        if !self.stalled && (!self.halted || self.int_acceptable()) {
+            self.next = Some(Tick(0));
+        }
         Ok(())
     }
 
@@ -946,6 +962,24 @@ impl Device for Z80 {
             }
             "contend_page" => {
                 self.contend_page = level == Level::High;
+            }
+            "stall" => {
+                // The arbiter holds the bus; the core parks between
+                // instructions and only a falling edge wakes it.
+                self.stalled = level == Level::High;
+                if self.stalled {
+                    self.next = None;
+                } else {
+                    self.wake(tick);
+                }
+            }
+            // A reset-request falling edge resets the core and
+            // re-runs the power-on sequence; the release line carries
+            // no work.
+            "reset" if level == Level::Low => {
+                self.reset();
+                self.reset_pending = true;
+                self.wake(tick);
             }
             _ => {}
         }

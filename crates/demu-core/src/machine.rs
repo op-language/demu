@@ -13,8 +13,8 @@ use rustc_hash::FxHashMap;
 
 use crate::bus::{Bus, BusWindow, ConflictPolicy};
 use crate::device::{
-    BusBank, DecodeHit, Device, DeviceSlices, EventBuffers, MachineCtx, Route, SnapshotError,
-    window_offset_of,
+    Borrow, BusBank, DecodeHit, Device, DeviceSlices, EventBuffers, MAX_BORROW_DEPTH, MachineCtx,
+    Route, SnapshotError, window_offset_of,
 };
 use crate::frequency::{Frequency, Tick};
 use crate::savestate::{
@@ -95,6 +95,10 @@ pub fn smoke_ctors() -> DeviceCtors {
     ctors.register(
         "smoke.rom",
         Box::new(|d, _| Ok(Box::new(devices::SmokeRom::new(d)))),
+    );
+    ctors.register(
+        "smoke.bridge",
+        Box::new(|d, _| Ok(Box::new(devices::SmokeBridge::new(d)))),
     );
     ctors
 }
@@ -502,22 +506,45 @@ impl Machine {
         let Some(bus_idx) = self.bus_index.get(bus_name).copied() else {
             return 0xFF;
         };
-        for hit in decode_candidates(&self.buses[bus_idx], address.0, false) {
+        let mut bus_idx = bus_idx;
+        let mut address = address;
+        for _ in 0..=MAX_BORROW_DEPTH {
+            let Some(hit) = decode_candidates(&self.buses[bus_idx], address.0, false)
+                .into_iter()
+                .find(|hit| {
+                    self.devices
+                        .get(hit.device)
+                        .and_then(|d| d.bus())
+                        .is_some_and(|bus| bus.decodes(address))
+                })
+            else {
+                return 0xFF;
+            };
             let Some(device) = self.devices.get(hit.device) else {
                 continue;
             };
             let Some(bus) = device.bus() else {
                 continue;
             };
-            if bus.decodes(address) {
-                return bus.peek(address);
+            if let Borrow::Bridge { bus, address: next } = bus.borrow(address) {
+                let Some(next_idx) = self.bus_index.get(&bus).copied() else {
+                    return 0xFF;
+                };
+                bus_idx = next_idx;
+                address = crate::frequency::Address(next);
+                continue;
             }
+            return bus.peek(address);
         }
         0xFF
     }
 
     /// A debug write through the bus decoder, stamped at the current
     /// tick. Returns true when a device accepted the write.
+    ///
+    /// Window devices that borrow another bus (the design's
+    /// DMA-parented form) route the access further; the write lands
+    /// when the chain finds a local answerer.
     pub fn debug_write(
         &mut self,
         bus_name: &str,
@@ -528,22 +555,58 @@ impl Machine {
             return false;
         };
         let tick = self.now();
-        for hit in decode_candidates(&self.buses[bus_idx], address.0, true) {
-            let Some(device) = self.devices.get_mut(hit.device) else {
+        let mut bus_idx = bus_idx;
+        let mut address = address;
+        for _ in 0..=MAX_BORROW_DEPTH {
+            let hops = decode_candidates(&self.buses[bus_idx], address.0, true);
+            let Some(next) = hops
+                .into_iter()
+                .find(|hit| {
+                    self.devices
+                        .get(hit.device)
+                        .and_then(|d| d.bus())
+                        .is_some_and(|bus| bus.decodes(address))
+                })
+                .map(|hit| hit.device)
+            else {
+                return false;
+            };
+            // Ask the device's borrow decision before the answering
+            // device's own write, then either route or land.
+            let decision = {
+                let Some(device) = self.devices.get_mut(next) else {
+                    return false;
+                };
+                let Some(bus) = device.bus_mut() else {
+                    return false;
+                };
+                bus.borrow(address)
+            };
+            if let Borrow::Bridge {
+                bus,
+                address: next_addr,
+            } = decision
+            {
+                let Some(next_idx) = self.bus_index.get(&bus).copied() else {
+                    return false;
+                };
+                bus_idx = next_idx;
+                address = crate::frequency::Address(next_addr);
                 continue;
+            }
+            let Some(device) = self.devices.get_mut(next) else {
+                return false;
             };
             let Some(bus) = device.bus_mut() else {
-                continue;
+                return false;
             };
-            if bus.decodes(address) {
-                bus.write(
-                    crate::device::AccessWidth::Byte,
-                    address,
-                    u32::from(value),
-                    tick,
-                );
-                return true;
-            }
+            bus.write(
+                crate::device::AccessWidth::Byte,
+                address,
+                u32::from(value),
+                tick,
+            );
+            return true;
         }
         false
     }
@@ -681,6 +744,129 @@ pub mod devices {
     //! The smoke device family: synthetic devices for framework tests.
 
     use super::*;
+
+    /// The smoke bridge: a window on one bus whose device borrows
+    /// another bus's decoder with a fixed address translation.
+    ///
+    /// The device exists to exercise the borrowed-decoder route: an
+    /// access into the bridge window re-decodes on the target bus at
+    /// the translated address, exactly like the DMA-parented bus form
+    /// the design states.
+    pub struct SmokeBridge {
+        name: String,
+        /// The borrowed bus name.
+        to_bus: String,
+        /// The window base on the caller's bus.
+        from_base: u32,
+        /// The translated base on the borrowed bus.
+        to_base: u32,
+        /// The window size in bytes.
+        size: u32,
+    }
+
+    impl SmokeBridge {
+        /// A bridge from its configuration entry.
+        pub fn new(device: &DeviceInstance) -> Self {
+            Self {
+                name: device.name.to_string(),
+                to_bus: device
+                    .params
+                    .get("to_bus")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("cpu")
+                    .to_string(),
+                from_base: device
+                    .params
+                    .get("from_base")
+                    .and_then(|v| v.as_integer())
+                    .unwrap_or(0x8000) as u32,
+                to_base: device
+                    .params
+                    .get("to_base")
+                    .and_then(|v| v.as_integer())
+                    .unwrap_or(0) as u32,
+                size: device
+                    .params
+                    .get("size")
+                    .and_then(|v| v.as_integer())
+                    .unwrap_or(0x8000) as u32,
+            }
+        }
+    }
+
+    impl crate::device::BusAccess for SmokeBridge {
+        fn read(
+            &mut self,
+            _width: crate::device::AccessWidth,
+            address: crate::frequency::Address,
+            _tick: Tick,
+        ) -> u32 {
+            let _ = address;
+            0xFF
+        }
+
+        fn write(
+            &mut self,
+            _width: crate::device::AccessWidth,
+            _address: crate::frequency::Address,
+            _value: u32,
+            _tick: Tick,
+        ) {
+        }
+
+        fn peek(&self, _address: crate::frequency::Address) -> u8 {
+            0xFF
+        }
+
+        fn borrow(&self, address: crate::frequency::Address) -> crate::device::Borrow {
+            let inside = address.0 >= self.from_base && address.0 < self.from_base + self.size;
+            if !inside {
+                return crate::device::Borrow::Local;
+            }
+            crate::device::Borrow::Bridge {
+                bus: self.to_bus.clone(),
+                address: (address.0 - self.from_base) + self.to_base,
+            }
+        }
+    }
+
+    impl Device for SmokeBridge {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+
+        fn bus(&self) -> Option<&dyn crate::device::BusAccess> {
+            Some(self)
+        }
+
+        fn bus_mut(&mut self) -> Option<&mut dyn crate::device::BusAccess> {
+            Some(self)
+        }
+
+        fn reset(&mut self) {}
+
+        fn boot(&mut self, _state: Option<&BootState>) {}
+
+        fn snapshot(&self) -> crate::device::Snapshot {
+            crate::device::Snapshot::new()
+        }
+
+        fn restore(&mut self, _data: &[u8]) -> Result<(), SnapshotError> {
+            Ok(())
+        }
+
+        fn notify_line(&mut self, _line: &str, _level: crate::signal::Level, _tick: Tick) {}
+
+        fn tick(&mut self, _tick: Tick, _ctx: &mut MachineCtx) {}
+    }
 
     /// The smoke CPU shim: a device that schedules its own next tick and
     /// holds the boot registers.
@@ -1019,7 +1205,6 @@ pub mod devices {
             self.data.copy_from_slice(data);
             Ok(())
         }
-
         fn notify_line(&mut self, _line: &str, _level: crate::signal::Level, _tick: Tick) {}
 
         fn tick(&mut self, _tick: Tick, _ctx: &mut MachineCtx) {}
@@ -1032,6 +1217,153 @@ mod tests {
 
     fn smoke_config() -> SystemConfig {
         demu_config::smoke_config().expect("smoke config is valid")
+    }
+
+    /// A two-bus bridge machine: the RAM answers on the main bus; the
+    /// bridge window on the sound bus borrows the main bus's decoder
+    /// at a translated address.
+    fn bridge_machine(to_bus: &str, from_base: u32, to_base: u32) -> Machine {
+        use demu_config::model::{Bus as CBus, ClockDomain, Window as CWindow};
+        use demu_config::newtypes::{DeviceName, KindName};
+        use std::collections::BTreeMap;
+
+        let mut params = BTreeMap::new();
+        params.insert("size".to_string(), toml::Value::Integer(32));
+        let ram = DeviceInstance {
+            name: DeviceName::new("ram0").expect("name"),
+            kind: KindName::new("smoke.ram").expect("kind"),
+            domain: "main".to_string(),
+            params,
+            dividers: BTreeMap::new(),
+        };
+        let mut bridge_params = BTreeMap::new();
+        bridge_params.insert(
+            "to_bus".to_string(),
+            toml::Value::String(to_bus.to_string()),
+        );
+        bridge_params.insert(
+            "from_base".to_string(),
+            toml::Value::Integer(from_base as i64),
+        );
+        bridge_params.insert("to_base".to_string(), toml::Value::Integer(to_base as i64));
+        bridge_params.insert("size".to_string(), toml::Value::Integer(0x8000));
+        let bridge = DeviceInstance {
+            name: DeviceName::new("bridge").expect("name"),
+            kind: KindName::new("smoke.bridge").expect("kind"),
+            domain: "main".to_string(),
+            params: bridge_params,
+            dividers: BTreeMap::new(),
+        };
+        let mut clocks = BTreeMap::new();
+        clocks.insert(
+            "main".to_string(),
+            ClockDomain {
+                name: "main".to_string(),
+                frequency: demu_config::newtypes::Frequency::new(16_000_000, 1).expect("freq"),
+                origin: "the test crystal".to_string(),
+            },
+        );
+        let mut by_name = BTreeMap::new();
+        by_name.insert(ram.name.clone(), 0usize);
+        by_name.insert(bridge.name.clone(), 1usize);
+        let config = SystemConfig {
+            name: "bridge-test".to_string(),
+            triple: "test".to_string(),
+            description: "the borrowed-decoder test machine".to_string(),
+            clocks,
+            devices: vec![ram, bridge],
+            devices_by_name: by_name,
+            buses: vec![
+                CBus {
+                    name: "cpu".to_string(),
+                    address_bits: 24,
+                    owner: None,
+                    parent: None,
+                },
+                CBus {
+                    name: "sound".to_string(),
+                    address_bits: 16,
+                    owner: None,
+                    parent: None,
+                },
+            ],
+            windows: vec![
+                CWindow {
+                    name: "w_ram".to_string(),
+                    bus: "cpu".to_string(),
+                    device: DeviceName::new("ram0").expect("name"),
+                    base: 0,
+                    size: 0x20,
+                    kind: Some(demu_config::model::WindowKind::Ram),
+                    mirror: None,
+                    overlay: None,
+                    overlay_read_priority: None,
+                    overlay_write_priority: None,
+                    conflict: None,
+                },
+                CWindow {
+                    name: "w_bridge".to_string(),
+                    bus: "sound".to_string(),
+                    device: DeviceName::new("bridge").expect("name"),
+                    base: from_base,
+                    size: 0x8000,
+                    kind: None,
+                    mirror: None,
+                    overlay: None,
+                    overlay_read_priority: None,
+                    overlay_write_priority: None,
+                    conflict: None,
+                },
+            ],
+            connections: Vec::new(),
+            signals: Vec::new(),
+            boot: BTreeMap::new(),
+            quirks: BTreeMap::new(),
+        };
+        let mut machine =
+            Machine::assemble(config, &smoke_ctors()).expect("bridge machine assembles");
+        machine.boot();
+        machine
+    }
+
+    fn ram_of(machine: &Machine) -> &devices::SmokeRam {
+        machine
+            .device_by_name("ram0")
+            .and_then(|d| d.as_any().downcast_ref::<devices::SmokeRam>())
+            .expect("ram0 exists")
+    }
+
+    fn poke_ram(machine: &mut Machine, index: usize, value: u8) -> Result<(), MachineError> {
+        machine
+            .device_by_name_mut("ram0")
+            .and_then(|d| d.as_any_mut().downcast_mut::<devices::SmokeRam>())
+            .ok_or_else(|| MachineError::Assembly("ram0 missing".into()))
+            .map(|ram| ram.poke(index, value))
+    }
+
+    #[test]
+    fn the_borrowed_decoder_routes_reads_and_writes() -> Result<(), MachineError> {
+        use crate::frequency::Address;
+        let mut machine = bridge_machine("cpu", 0x8000, 0x0000);
+        poke_ram(&mut machine, 0x10, 0x5A)?;
+        // A read on the sound bus bridges to the main bus's RAM.
+        assert_eq!(machine.peek("sound", Address(0x8010)), 0x5A);
+        // A debug write bridges the same way and lands on the RAM.
+        assert!(machine.debug_write("sound", Address(0x8011), 0x21));
+        assert_eq!(ram_of(&machine).data()[0x11], 0x21);
+        // The direct forms still answer.
+        assert_eq!(machine.peek("cpu", Address(0x10)), 0x5A);
+        Ok(())
+    }
+
+    #[test]
+    fn a_borrow_loop_answers_nothing() {
+        use crate::frequency::Address;
+        // The bridge translates back into its own window, so every
+        // hop loops; the depth cap stops the access.
+        let mut machine = bridge_machine("sound", 0x8000, 0x8000);
+        assert_eq!(machine.peek("sound", Address(0x8010)), 0xFF);
+        assert!(!machine.debug_write("sound", Address(0x8011), 0x21));
     }
 
     #[test]
