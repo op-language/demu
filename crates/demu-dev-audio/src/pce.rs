@@ -508,6 +508,10 @@ impl Device for PcePsg {
         Some(self)
     }
 
+    fn audio_mut(&mut self) -> Option<&mut dyn demu_core::AudioSource> {
+        Some(self)
+    }
+
     fn reset(&mut self) {
         self.select = 0;
         self.channel = 0;

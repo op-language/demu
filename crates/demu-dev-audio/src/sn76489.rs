@@ -386,6 +386,10 @@ impl Device for Sn76489 {
         Some(self)
     }
 
+    fn audio_mut(&mut self) -> Option<&mut dyn demu_core::AudioSource> {
+        Some(self)
+    }
+
     fn reset(&mut self) {
         // The published power-up form of the Sega integrated chip:
         // the period and control registers hold zero and the volume

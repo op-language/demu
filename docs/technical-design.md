@@ -1397,3 +1397,101 @@ master the machine's divider is 432.
 - The M1 bank ports map four bytes at the io spaces 08-0B without the
   MAME mirror form, so drivers that bank through the port address's
   high byte stay pending the real-ROM evidence pass.
+
+## 26. As-built notes: the media pipeline
+
+### The input script
+
+The parser accepts the canonical `#<domain>:<ticks> <device> <event>`
+form and the nanosecond form `#<ns>`; a nanosecond stamp converts
+against the machine's primary domain (the first clock name in the
+resolved name-sorted clock map, the domain the scheduler treats as
+primary) with the section 2.5 boundary rule. A `#` token is an event stamp only when it carries the stamp
+shape, a `domain:ticks` pair or a digit run; any other `#` token begins
+a comment, as does a `#` after the timestamp position. `label <name>`
+marks a cyclic section; `repeat <name> <count>` repeats the section
+`count` times total, shifting each copy by the section's own span
+(last event tick minus first tick), so the first event of copy `k`
+lands exactly on the last event tick of copy `k-1` and the copies fire
+in script order at the shared tick. A section must use one stamp form;
+mixed forms, zero spans, unknown labels, duplicates, and empty
+sections are validation errors.
+
+### The replay scheduler
+
+Pending events stay in script order. The scheduler fires an event when
+the event instant compares due against the machine's primary tick by
+the exact cross-multiplication. For a pending event on any domain, the
+run loop stops the primary at tick `p = ceil(t * d_e * n_p / (n_e *
+d_p))`, computed exactly in u128, so an event on a secondary domain
+fires no earlier than its instant. The `run-until` idle-window
+behavior changed to support exact sync points: when a finite run
+target sits past every domain's queued events, the primary clock
+advances to the target (a free run still ends without advancing). A
+parked machine therefore reports the run boundary's tick, and the
+parked state itself is visible through the device's queue (a parked
+core declares no next event).
+
+### The Matroska forms
+
+`demu-mkv` implements its own EBML primitives and two file forms. The
+input form carries one metadata track (TrackType `0x21`, CodecID
+`D_DEMU/INPUT/1`) whose private codec data is the 8-byte magic
+`DEMUINP1`, one block per event in file order, one cluster per event
+at the event's nanosecond time; the block payload is
+`u16le|u64le|u16le|u16le` length-prefixed domain, ticks, device, and
+event text, so the replay reads the exact tick values and never a
+nanosecond round trip. The system configuration TOML rides as the
+`demu.config` tag text and as a `config.toml` attachment; `demu.triple`
+and `demu.machine` tags carry the machine summary. The render form
+carries one cluster per emulated display frame at TimestampScale `1`
+(nanosecond timebase): the FFV1 keyframe block on track 2, the
+native-rate PCM block on track 3, and the resampled 48 kHz block on
+track 1, the first and default-selected audio track. The FFV1 track's
+CodecID is `V_FFV1` and its codec private is demu's configuration
+record; the PCM tracks use `A_PCM/INT/LIT` with a WAVEFORMATEX private.
+
+### The resampler
+
+`demu-resample` holds a rational phase accumulator: output sample `i`
+takes the source sample at index `floor(i * source_rate / 48000)`,
+compared incrementally in u128, so the output over any split of the
+push calls is bit-identical and any two runs produce the same stream.
+
+### The shell commands
+
+`script <file>` loads and validates a script against the loaded
+machine and installs it as the run schedule; `run`, `step`,
+`run-frame`, `run-until`, and the free run then apply the scheduled
+events at their exact instants. `mkv-input <script> -o <file>` writes
+the input form. `mkv-render <input.mkv> <frames> -o <output.mkv>`
+rebuilds the machine from the file's embedded configuration through
+the binary's factory, replays the events over the requested display
+frames, and records the render form. `render-session <frames> -o
+<file>` records the current session onward. The recorder drains every
+audio device after each frame in device declaration order,
+concatenates the chunks for the native track, and feeds the same
+chunks through the 48 kHz accumulator; a machine without an audio
+device records video only, and a machine without a video device is an
+error.
+
+### Known first-build approximations
+
+- The FFV1 implementation is demu's own range-coder build with one
+  slice per frame, per-slice CRC, and no run mode; common-player
+  playback spot checks remain pending the follow-up evidence pass.
+- The render segment opens with the EBML unknown-size marker and
+  stays open until end of file, because the frame clusters stream as
+  they record; the demuxer falls back to "the rest of the buffer" for
+  the all-ones size.
+- Cluster timestamps come from the primary domain's tick at the
+  vblank; a secondary-domain display would stamp with its own domain.
+- The audio drain happens once per completed display frame; a machine
+  whose audio and frame clocks differ in ratio accumulates that exact
+  drift in the native-track sample counts, which the timestamps
+  reflect.
+- The SM83 PPU's vblank edge fired on every dot of line 144 in the
+  first build; it now fires once on the line's first dot, so the
+  `frames` counter and the Vblank event carry one entry per emulated
+  display frame, which the one-frame-per-video-block contract
+  requires.

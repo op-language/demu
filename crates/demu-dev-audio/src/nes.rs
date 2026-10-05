@@ -753,6 +753,10 @@ impl Device for NesApu {
         Some(self)
     }
 
+    fn audio_mut(&mut self) -> Option<&mut dyn demu_core::AudioSource> {
+        Some(self)
+    }
+
     fn reset(&mut self) {
         self.frame_step = 0;
         self.frame_elapsed = 0;

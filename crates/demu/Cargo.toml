@@ -14,6 +14,7 @@ path = "src/main.rs"
 demu-config = { version = "0.1.0", path = "../demu-config" }
 demu-core = { version = "0.1.0", path = "../demu-core" }
 demu-shell = { version = "0.1.0", path = "../demu-shell" }
+demu-mkv = { version = "0.1.0", path = "../demu-mkv" }
 demu-symbols = { version = "0.1.0", path = "../demu-symbols" }
 demu-cpu-sm83 = { version = "0.1.0", path = "../demu-cpu-sm83" }
 demu-cpu-mos6502 = { version = "0.1.0", path = "../demu-cpu-mos6502" }

@@ -10,6 +10,8 @@ description = "Interactive shell, JSON-lines protocol, and Unix-socket server fo
 png = "0.18.1"
 demu-config = { version = "0.1.0", path = "../demu-config" }
 demu-core = { version = "0.1.0", path = "../demu-core" }
+demu-mkv = { version = "0.1.0", path = "../demu-mkv" }
+demu-resample = { version = "0.1.0", path = "../demu-resample" }
 demu-symbols = { version = "0.1.0", path = "../demu-symbols" }
 rustc-hash = "2.1.3"
 serde = { version = "1.0.229", features = ["derive"] }

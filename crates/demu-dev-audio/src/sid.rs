@@ -442,6 +442,10 @@ impl Device for Sid {
         Some(self)
     }
 
+    fn audio_mut(&mut self) -> Option<&mut dyn demu_core::AudioSource> {
+        Some(self)
+    }
+
     fn reset(&mut self) {
         for v in &mut self.voices {
             *v = Voice::new();

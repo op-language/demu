@@ -23,6 +23,7 @@ pub mod frequency;
 pub mod machine;
 pub mod savestate;
 pub mod scheduler;
+pub mod script;
 pub mod signal;
 pub mod triggers;
 
@@ -34,5 +35,6 @@ pub use device::{
 pub use frequency::{Address, Divider, Frequency, Tick};
 pub use machine::{DeviceCtor, DeviceCtors, Machine, RunHook, smoke_ctors};
 pub use scheduler::{ClockDomain, Event, Scheduler};
+pub use script::{InputRunError, InputScheduler, ScriptError, ScriptEvent, run_until_with_input};
 pub use signal::{DriveMode, Level, SignalLine};
 pub use triggers::{Trigger, TriggerError, TriggerEvent, TriggerKind, TriggerRegistry};

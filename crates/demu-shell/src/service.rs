@@ -1,15 +1,24 @@
 //! The machine service: typed command execution over a loaded machine.
 //!
-//! The service owns the [`Machine`] plus optional state (symbols, dump and
-//! sentinel targets). The text and JSON renderers call it; neither holds
-//! device access.
+//! The service owns the [`Machine`] plus optional state (symbols, dump
+//! and sentinel targets, the input schedule). The text and JSON
+//! renderers call it; neither holds device access.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use demu_config::model::SystemConfig;
 use demu_core::expr::EvalError;
 use demu_core::machine::Machine;
-use demu_core::triggers::TriggerRegistry;
+use demu_core::script::{InputScheduler, InputScript, run_until_with_input};
+use demu_core::triggers::TriggerEvent;
+use demu_core::{Tick, TriggerRegistry};
+use demu_resample::Resampler;
 use demu_symbols::{SymbolLookup, SymbolTable};
+
+/// A machine factory for the media commands that rebuild a machine.
+pub type MachineFactory =
+    Arc<dyn Fn(&SystemConfig) -> Result<Machine, demu_core::machine::MachineError> + Send + Sync>;
 
 /// A command execution failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -24,6 +33,9 @@ pub enum CommandError {
     /// The trigger text does not parse.
     #[error("bad trigger: {0}")]
     BadTrigger(String),
+    /// The input script does not parse or validate against the machine.
+    #[error("bad script: {0}")]
+    BadScript(String),
     /// The device or register name is unknown.
     #[error("unknown {0}: {1}")]
     Unknown(&'static str, String),
@@ -81,6 +93,12 @@ pub struct MachineService {
     machine: Option<Machine>,
     symbols: Option<SymbolLookup>,
     triggers: TriggerRegistry,
+    /// The input event schedule loaded by the `script` command.
+    input: InputScheduler,
+    /// The machine factory for the media commands that rebuild machines.
+    factory: Option<MachineFactory>,
+    /// The configuration source text, tagged into media files.
+    config_source: Option<String>,
     /// The memory dump path for the CLI contract, if any.
     pub dump_path: Option<std::path::PathBuf>,
     /// The sentinel as `(address, expected value)`, if any.
@@ -100,9 +118,23 @@ impl MachineService {
             machine: None,
             symbols: None,
             triggers: TriggerRegistry::new(),
+            input: InputScheduler::empty(),
+            factory: None,
+            config_source: None,
             dump_path: None,
             sentinel: None,
         }
+    }
+
+    /// Install the machine factory the media commands use to rebuild a
+    /// machine from an embedded configuration.
+    pub fn set_machine_factory(&mut self, factory: MachineFactory) {
+        self.factory = Some(factory);
+    }
+
+    /// Record the configuration's source text for media tags.
+    pub fn set_config_source(&mut self, text: impl Into<String>) {
+        self.config_source = Some(text.into());
     }
 
     /// Load a machine from a resolved configuration.
@@ -269,11 +301,22 @@ impl MachineService {
         })
     }
 
-    /// Run the machine until the primary domain reaches `units`.
+    /// Run the machine until the primary domain reaches `units`,
+    /// applying scheduled script events on the way.
     pub fn run(&mut self, units: u64) -> Result<CommandOutput, CommandError> {
+        let start = {
+            let machine = self.machine.as_ref().ok_or(CommandError::NoMachine)?;
+            machine.now().0
+        };
         let machine = self.machine.as_mut().ok_or(CommandError::NoMachine)?;
-        let start = machine.now().0;
-        machine.run_until(demu_core::Tick(start + units));
+        Self::run_segments(
+            machine,
+            &mut self.input,
+            Tick(start.saturating_add(units)),
+            &mut |_event| false,
+            false,
+        )?;
+        let machine = self.machine.as_ref().ok_or(CommandError::NoMachine)?;
         let now = machine.now().0;
         Ok(CommandOutput::Text {
             text: format!("ran to {now}"),
@@ -292,17 +335,15 @@ impl MachineService {
         let start = machine.now().0;
         let triggers = &mut self.triggers;
         let mut stopped = false;
-        machine.run_hook(
-            demu_core::Tick(u64::MAX),
-            &mut |event| {
-                let hit = !triggers.fire_event(event).is_empty();
-                if hit {
-                    stopped = true;
-                }
-                hit
-            },
-            true,
-        );
+        let mut hook = |event: &TriggerEvent| {
+            let hit = !triggers.fire_event(event).is_empty();
+            if hit {
+                stopped = true;
+            }
+            hit
+        };
+        let input = &mut self.input;
+        Self::run_segments(machine, input, Tick(u64::MAX), &mut hook, true)?;
         let now = machine.now().0;
         Ok(CommandOutput::Text {
             text: format!("ran to {now}"),
@@ -327,25 +368,22 @@ impl MachineService {
         let start = machine.now().0;
         let triggers = &mut self.triggers;
         let mut fired: Option<serde_json::Value> = None;
-        machine.run_hook(
-            demu_core::Tick(u64::MAX),
-            &mut |event| {
-                let hit = match (want.as_str(), event) {
-                    ("vblank", demu_core::TriggerEvent::Vblank) => true,
-                    ("irq", demu_core::TriggerEvent::Irq) => true,
-                    ("fetch", demu_core::TriggerEvent::Fetch(a)) => target == 0 || a.0 == target,
-                    ("read", demu_core::TriggerEvent::Read(a)) => target == 0 || a.0 == target,
-                    ("write", demu_core::TriggerEvent::Write(a)) => target == 0 || a.0 == target,
-                    _ => false,
-                };
-                if hit {
-                    fired = Some(serde_json::json!(format!("{event:?}")));
-                    return true;
-                }
-                !triggers.fire_event(event).is_empty()
-            },
-            true,
-        );
+        let mut hook = |event: &TriggerEvent| {
+            let hit = match (want.as_str(), event) {
+                ("vblank", TriggerEvent::Vblank) => true,
+                ("irq", TriggerEvent::Irq) => true,
+                ("fetch", TriggerEvent::Fetch(a)) => target == 0 || a.0 == target,
+                ("read", TriggerEvent::Read(a)) => target == 0 || a.0 == target,
+                ("write", TriggerEvent::Write(a)) => target == 0 || a.0 == target,
+                _ => false,
+            };
+            if hit {
+                fired = Some(serde_json::json!(format!("{event:?}")));
+                return true;
+            }
+            !triggers.fire_event(event).is_empty()
+        };
+        Self::run_segments(machine, &mut self.input, Tick(u64::MAX), &mut hook, true)?;
         let now = machine.now().0;
         Ok(CommandOutput::Text {
             text: format!("ran to {now}"),
@@ -357,7 +395,8 @@ impl MachineService {
         })
     }
 
-    /// Run `frames` display frames.
+    /// Run `frames` display frames, applying scheduled script events on
+    /// the way.
     pub fn run_frame(&mut self, frames: u64) -> Result<CommandOutput, CommandError> {
         let machine = self.machine.as_mut().ok_or(CommandError::NoMachine)?;
         let start = machine.now().0;
@@ -370,16 +409,13 @@ impl MachineService {
         };
         let start_frames = video_frames(machine);
         let mut count = 0u64;
-        machine.run_hook(
-            demu_core::Tick(u64::MAX),
-            &mut |event| {
-                if matches!(event, demu_core::TriggerEvent::Vblank) {
-                    count += 1;
-                }
-                count >= frames
-            },
-            true,
-        );
+        let mut hook = |event: &TriggerEvent| {
+            if matches!(event, TriggerEvent::Vblank) {
+                count += 1;
+            }
+            count >= frames
+        };
+        Self::run_segments(machine, &mut self.input, Tick(u64::MAX), &mut hook, true)?;
         let now = machine.now().0;
         let end_frames = video_frames(machine);
         Ok(CommandOutput::Text {
@@ -390,6 +426,25 @@ impl MachineService {
                 "frames": [start_frames, end_frames],
             }),
         })
+    }
+
+    /// Run the machine toward `target`; pending script events apply at
+    /// their exact instants, other events go to the hook. A free
+    /// function so the callers can borrow the machine, the schedule,
+    /// and the trigger table as disjoint fields.
+    fn run_segments(
+        machine: &mut Machine,
+        input: &mut InputScheduler,
+        target: Tick,
+        hook: &mut dyn FnMut(&TriggerEvent) -> bool,
+        emit: bool,
+    ) -> Result<(), CommandError> {
+        if input.pending() == 0 {
+            machine.run_hook(target, hook, emit);
+            return Ok(());
+        }
+        run_until_with_input(machine, input, target, hook, emit)
+            .map_err(|e| CommandError::Failed(e.to_string()))
     }
 
     /// Write `n` bytes from the bus into a file.
@@ -458,6 +513,269 @@ impl MachineService {
             }
             None => Err(CommandError::Unknown("device", device.to_string())),
         }
+    }
+
+    /// Load an input script: parse, validate against the machine, and
+    /// install it as the run schedule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError::BadScript`] when the script does not
+    /// parse or validate, and [`CommandError::NoMachine`] without a
+    /// machine.
+    pub fn load_script(&mut self, text: &str) -> Result<CommandOutput, CommandError> {
+        let machine = self.machine.as_ref().ok_or(CommandError::NoMachine)?;
+        let script = InputScript::parse(text, &machine.config)
+            .map_err(|e| CommandError::BadScript(e.to_string()))?;
+        let count = script.events().len();
+        self.input = InputScheduler::new(script);
+        Ok(CommandOutput::Text {
+            text: format!("loaded {count} input events"),
+            json: serde_json::json!({"events": count}),
+        })
+    }
+
+    /// Convert an input script file into the input form of a Matroska
+    /// file: one event track plus the configuration tags and attachment.
+    ///
+    /// # Errors
+    ///
+    /// Returns the command error for the caller to report.
+    pub fn mkv_input(
+        &mut self,
+        script_path: &str,
+        out_path: &str,
+    ) -> Result<CommandOutput, CommandError> {
+        let machine = self.machine.as_ref().ok_or(CommandError::NoMachine)?;
+        let config_text = self
+            .config_source
+            .clone()
+            .ok_or_else(|| CommandError::Failed("no configuration source is known".to_string()))?;
+        let text =
+            std::fs::read_to_string(script_path).map_err(|e| CommandError::Io(e.to_string()))?;
+        let script = InputScript::parse(&text, &machine.config)
+            .map_err(|e| CommandError::BadScript(e.to_string()))?;
+        let count = script.events().len();
+        demu_mkv::write_input_file(
+            std::path::Path::new(out_path),
+            &machine.config,
+            &config_text,
+            script.events(),
+        )
+        .map_err(|e| CommandError::Failed(e.to_string()))?;
+        Ok(CommandOutput::Text {
+            text: format!("wrote {count} event blocks to {out_path}"),
+            json: serde_json::json!({"events": count, "path": out_path}),
+        })
+    }
+
+    /// Render an input-form Matroska file: rebuild the machine from the
+    /// file's embedded configuration, replay its events over `frames`
+    /// display frames, and record the output form with FFV1 video and
+    /// both PCM tracks.
+    ///
+    /// # Errors
+    ///
+    /// Returns the command error when the file, the rebuild, or the
+    /// recording fails.
+    pub fn mkv_render(
+        &mut self,
+        input_path: &str,
+        frames: u64,
+        out_path: &str,
+    ) -> Result<CommandOutput, CommandError> {
+        let source = demu_mkv::read_input_file(std::path::Path::new(input_path))
+            .map_err(|e| CommandError::Failed(e.to_string()))?;
+        let config_text = source.config_text.clone().ok_or(CommandError::Failed(
+            "the file carries no system configuration".to_string(),
+        ))?;
+        self.rebuild_machine(&config_text)?;
+        self.input = InputScheduler::new(InputScript::from_events(source.events));
+        // The render tags the file with the machine it actually ran:
+        // the file's embedded configuration text, not the CLI
+        // session's.
+        self.config_source = Some(config_text);
+        self.record_pipeline(out_path, frames)
+    }
+
+    /// Record the current session for `frames` display frames, with any
+    /// scheduled script events applied, into the output form.
+    ///
+    /// # Errors
+    ///
+    /// Returns the command error when the machine lacks a video device,
+    /// or when the recording fails.
+    pub fn render_session(
+        &mut self,
+        frames: u64,
+        out_path: &str,
+    ) -> Result<CommandOutput, CommandError> {
+        {
+            let machine = self.machine.as_ref().ok_or(CommandError::NoMachine)?;
+            if machine.devices.iter().all(|d| d.video().is_none()) {
+                return Err(CommandError::Failed(
+                    "the machine declares no video device".to_string(),
+                ));
+            }
+        }
+        self.record_pipeline(out_path, frames)
+    }
+
+    /// The shared media recording loop.
+    ///
+    /// The loop runs one display frame per round through the vblank
+    /// hook with the script events interleaved, captures the frame,
+    /// drains every audio device, resamples the drained samples, and
+    /// writes the three blocks of the emulated display frame. The
+    /// writer builds at the first completed frame, when the frame
+    /// geometry and the native sample rate are known.
+    ///
+    /// # Errors
+    ///
+    /// Returns the command error when a run, an event, or the writer
+    /// fails, or when no display frame ever completes.
+    fn record_pipeline(
+        &mut self,
+        out_path: &str,
+        frames: u64,
+    ) -> Result<CommandOutput, CommandError> {
+        let config_text = self
+            .config_source
+            .clone()
+            .ok_or_else(|| CommandError::Failed("no configuration source is known".to_string()))?;
+        if frames == 0 {
+            return Ok(CommandOutput::Text {
+                text: "recorded 0 frames".to_string(),
+                json: serde_json::json!({"frames": 0, "path": out_path}),
+            });
+        }
+        let (triple, name) = {
+            let machine = self.machine.as_ref().ok_or(CommandError::NoMachine)?;
+            (machine.config.triple.clone(), machine.config.name.clone())
+        };
+        let mut writer: Option<demu_mkv::RenderWriter> = None;
+        let mut resampler: Option<Resampler> = None;
+        let mut native_rate = 0u32;
+        let mut made = 0u64;
+        let mut rounds = 0u64;
+        let max_rounds = frames.saturating_add(1024);
+        while made < frames {
+            if rounds >= max_rounds {
+                return Err(CommandError::Failed(
+                    "no display frame completed for the recording".to_string(),
+                ));
+            }
+            rounds += 1;
+            let machine = self.machine.as_mut().ok_or(CommandError::NoMachine)?;
+            let input_slot = &mut self.input;
+            let primary = machine.scheduler.primary;
+            let before = machine.now().0;
+            let mut vblanks = 0u64;
+            let mut hook = |event: &TriggerEvent| {
+                if matches!(event, TriggerEvent::Vblank) {
+                    vblanks += 1;
+                }
+                vblanks >= 1
+            };
+            Self::run_segments(machine, input_slot, Tick(u64::MAX), &mut hook, true)
+                .map_err(|e| CommandError::Failed(e.to_string()))?;
+            if vblanks == 0 && machine.now().0 == before {
+                return Err(CommandError::Failed(
+                    "the machine cannot reach the next display frame".to_string(),
+                ));
+            }
+            if vblanks == 0 {
+                continue;
+            }
+            let ts = machine.scheduler.domains[primary]
+                .frequency
+                .ticks_to_ns(machine.now().0);
+            let frame = machine
+                .devices
+                .iter()
+                .find_map(|d| d.video())
+                .and_then(|v| v.frame())
+                .cloned()
+                .ok_or_else(|| CommandError::Failed("no frame is complete yet".to_string()))?;
+            // The track layout assumes one sample rate: the first
+            // audio device's. A later rate difference would misstamp
+            // both PCM tracks, so the recording fails loudly instead.
+            let mut native = Vec::new();
+            for device in machine.devices.iter_mut() {
+                if let Some(audio) = device.audio_mut() {
+                    native.extend(audio.take_samples());
+                    if native_rate == 0 {
+                        native_rate = audio.sample_rate();
+                    } else if audio.sample_rate() != native_rate {
+                        return Err(CommandError::Failed(
+                            "the machine declares audio devices with different sample rates"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+            if resampler.is_none() && native_rate > 0 {
+                resampler =
+                    Some(Resampler::new(native_rate).map_err(|e| {
+                        CommandError::Failed(format!("resampler setup failed: {e}"))
+                    })?);
+            }
+            let resampled = match resampler.as_mut() {
+                Some(resampler) => {
+                    resampler.push(&native);
+                    resampler.take_output()
+                }
+                None => Vec::new(),
+            };
+            if writer.is_none() {
+                writer = Some(
+                    demu_mkv::RenderWriter::create(
+                        std::path::Path::new(out_path),
+                        frame.width,
+                        frame.height,
+                        (native_rate > 0).then_some(native_rate),
+                        &config_text,
+                        &triple,
+                        &name,
+                    )
+                    .map_err(|e| CommandError::Failed(e.to_string()))?,
+                );
+            }
+            writer
+                .as_mut()
+                .map(|writer| writer.add_frame(ts, &frame.pixels, &native, &resampled))
+                .transpose()
+                .map_err(|e| CommandError::Failed(e.to_string()))?;
+            made += 1;
+        }
+        if let Some(writer) = writer.as_mut() {
+            writer
+                .finish()
+                .map_err(|e| CommandError::Failed(e.to_string()))?;
+        }
+        Ok(CommandOutput::Text {
+            text: format!("recorded {made} frames to {out_path}"),
+            json: serde_json::json!({"frames": made, "path": out_path}),
+        })
+    }
+
+    /// Rebuild the session machine from a configuration text through
+    /// the installed factory. The rebuilt machine replaces the current
+    /// one; the script schedule stays.
+    fn rebuild_machine(&mut self, config_text: &str) -> Result<(), CommandError> {
+        let factory = self
+            .factory
+            .clone()
+            .ok_or_else(|| CommandError::Failed("no machine factory is installed".to_string()))?;
+        let raw = demu_config::RawConfig::parse(config_text)
+            .map_err(|e| CommandError::Failed(format!("configuration parse failed: {e}")))?;
+        let (config, warnings) = demu_config::validate(&raw).map_err(|report| {
+            CommandError::Failed(format!("configuration validation failed: {report:?}"))
+        })?;
+        let _ = warnings;
+        let machine = factory(&config).map_err(|e| CommandError::Failed(e.to_string()))?;
+        self.machine = Some(machine);
+        Ok(())
     }
 
     /// The machine's video source, when one device produces a display.
@@ -603,4 +921,71 @@ fn encode_png(frame: &demu_core::Frame) -> Result<Vec<u8>, std::io::Error> {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::text::CommandOutputText as _;
+
+    fn service() -> MachineService {
+        let mut service = MachineService::new();
+        service.load_machine(
+            Machine::new(demu_config::smoke_config().expect("smoke config is valid"))
+                .expect("smoke machine assembles"),
+        );
+        service.machine_mut().expect("loaded").boot();
+        service
+    }
+
+    #[test]
+    fn script_loads_and_events_apply_during_run() {
+        let mut service = service();
+        let out = service
+            .load_script("#main:2 cpu0 left\n#main:4 cpu0 right\n")
+            .expect("script loads");
+        assert_eq!(out.text(), "loaded 2 input events");
+
+        // One machine unit steps past both event instants on the 4 MHz
+        // smoke domain; the events inject in script order.
+        service.step(10).expect("run");
+        let machine = service.machine().expect("machine");
+        let cpu = machine
+            .device_by_name("cpu0")
+            .and_then(|d| {
+                d.as_any()
+                    .downcast_ref::<demu_core::machine::devices::SmokeCpu>()
+            })
+            .expect("cpu0 exists");
+        assert_eq!(cpu.input_log(), &["left".to_string(), "right".to_string()]);
+    }
+
+    #[test]
+    fn script_rejects_unknown_devices() {
+        let mut service = service();
+        assert!(matches!(
+            service.load_script("#main:2 ghost nope\n"),
+            Err(CommandError::BadScript(_))
+        ));
+    }
+
+    #[test]
+    fn script_requires_a_machine() {
+        let mut service = MachineService::new();
+        assert!(matches!(
+            service.load_script("#main:2 cpu0 left\n"),
+            Err(CommandError::NoMachine)
+        ));
+    }
+
+    #[test]
+    fn render_session_needs_a_video_device() {
+        let mut service = service();
+        let path = std::env::temp_dir().join("demu-shell-render-session.mkv");
+        assert!(matches!(
+            service.render_session(1, &path.to_string_lossy()),
+            Err(CommandError::Failed(message)) if message.contains("no video device")
+        ));
+        std::fs::remove_file(&path).ok();
+    }
 }

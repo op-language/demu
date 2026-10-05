@@ -1866,6 +1866,10 @@ impl Device for LynxSuzy {
         Some(self)
     }
 
+    fn audio_mut(&mut self) -> Option<&mut dyn demu_core::AudioSource> {
+        Some(self)
+    }
+
     fn reset(&mut self) {
         self.page = [0; 0x80];
         self.ctl = [0; 0x80];

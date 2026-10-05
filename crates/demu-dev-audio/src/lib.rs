@@ -475,6 +475,14 @@ impl Device for Apu {
         Some(self)
     }
 
+    fn audio(&self) -> Option<&dyn AudioSource> {
+        Some(self)
+    }
+
+    fn audio_mut(&mut self) -> Option<&mut dyn AudioSource> {
+        Some(self)
+    }
+
     fn reset(&mut self) {
         self.nr52 = 0xF1;
         self.sequencer = 0;

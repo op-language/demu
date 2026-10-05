@@ -5,3 +5,8 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "EBML and Matroska reader and writer."
+
+[dependencies]
+demu-core = { version = "0.1.0", path = "../demu-core" }
+demu-config = { version = "0.1.0", path = "../demu-config" }
+thiserror = "2.0.20"

@@ -147,6 +147,15 @@ pub trait Device {
         None
     }
 
+    /// The device as a mutable audio source, when it produces samples.
+    ///
+    /// The media pipeline drains accumulated samples through this
+    /// accessor; devices that implement [`AudioSource`] return
+    /// `Some(self)`.
+    fn audio_mut(&mut self) -> Option<&mut dyn AudioSource> {
+        None
+    }
+
     /// Restore power-on state without the configured boot data.
     fn reset(&mut self);
 

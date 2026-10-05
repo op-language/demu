@@ -49,6 +49,7 @@ dependencies = [
  "demu-dev-memory",
  "demu-dev-serial",
  "demu-dev-video",
+ "demu-mkv",
  "demu-shell",
  "demu-symbols",
  "png",
@@ -202,10 +203,18 @@ dependencies = [
 [[package]]
 name = "demu-mkv"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+ "thiserror",
+]
 
 [[package]]
 name = "demu-resample"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "demu-shell"
@@ -213,6 +222,8 @@ version = "0.1.0"
 dependencies = [
  "demu-config",
  "demu-core",
+ "demu-mkv",
+ "demu-resample",
  "demu-symbols",
  "png",
  "rustc-hash",

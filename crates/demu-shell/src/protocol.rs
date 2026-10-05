@@ -55,6 +55,8 @@ pub enum ErrorCode {
     BadAddress,
     /// The trigger text does not parse.
     BadTrigger,
+    /// The input script does not parse or validate.
+    BadScript,
     /// The device name is unknown.
     UnknownDevice,
     /// The register name is unknown.
@@ -75,6 +77,7 @@ impl ErrorCode {
             ErrorCode::BadArgs => "bad_args",
             ErrorCode::BadAddress => "bad_address",
             ErrorCode::BadTrigger => "bad_trigger",
+            ErrorCode::BadScript => "bad_script",
             ErrorCode::UnknownDevice => "unknown_device",
             ErrorCode::UnknownRegister => "unknown_register",
             ErrorCode::NoMachine => "no_machine",

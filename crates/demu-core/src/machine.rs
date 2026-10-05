@@ -415,7 +415,19 @@ impl Machine {
                 }
             }
         }
-        let Some(i) = best else { return false };
+        let Some(i) = best else {
+            // No event is due on any domain before the target. A finite
+            // run boundary still lets the primary domain's real time
+            // pass, so sync points land exactly on their tick; a free
+            // run (`u64::MAX`) ends here without advancing.
+            if target.0 != u64::MAX {
+                let primary = &mut self.scheduler.domains[self.scheduler.primary];
+                if primary.now < target {
+                    primary.advance_to(target);
+                }
+            }
+            return false;
+        };
         let next = self.scheduler.domains[i]
             .next_time()
             .expect("the loop found a non-empty queue");
@@ -869,7 +881,8 @@ pub mod devices {
     }
 
     /// The smoke CPU shim: a device that schedules its own next tick and
-    /// holds the boot registers.
+    /// holds the boot registers. It also records injected input events,
+    /// which gives framework tests a stand-in input sink.
     #[derive(Debug)]
     pub struct SmokeCpu {
         name: String,
@@ -877,6 +890,10 @@ pub mod devices {
         pub ip: u64,
         next: Option<Tick>,
         boot_registers: std::collections::BTreeMap<String, u64>,
+        /// The injected events in injection order. The recording is
+        /// debug bookkeeping, not simulated state, so the snapshot does
+        /// not carry it.
+        input_log: Vec<String>,
     }
 
     impl SmokeCpu {
@@ -888,7 +905,22 @@ pub mod devices {
                 ip: 0,
                 next: None,
                 boot_registers: std::collections::BTreeMap::new(),
+                input_log: Vec::new(),
             }
+        }
+    }
+
+    impl crate::device::InputSink for SmokeCpu {
+        fn inject(&mut self, event: &str) -> bool {
+            self.input_log.push(event.to_string());
+            true
+        }
+    }
+
+    impl SmokeCpu {
+        /// The injected events in script order.
+        pub fn input_log(&self) -> &[String] {
+            &self.input_log
         }
     }
 
@@ -927,6 +959,10 @@ pub mod devices {
         }
 
         fn cpu_mut(&mut self) -> Option<&mut dyn crate::device::CpuDebug> {
+            Some(self)
+        }
+
+        fn input_mut(&mut self) -> Option<&mut dyn crate::device::InputSink> {
             Some(self)
         }
 

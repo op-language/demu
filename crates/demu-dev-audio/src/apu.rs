@@ -1618,6 +1618,10 @@ impl Device for Apu {
         Some(self)
     }
 
+    fn audio_mut(&mut self) -> Option<&mut dyn demu_core::AudioSource> {
+        Some(self)
+    }
+
     fn reset(&mut self) {
         self.a = 0;
         self.x = 0;

@@ -194,6 +194,8 @@ fn run_session(cli: &Cli) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // The session machine assembles from this same source; the media
+    // commands tag files with the configuration text.
     let (config, warnings) = match demu_config::validate(&raw) {
         Ok(pair) => pair,
         Err(report) => {
@@ -205,6 +207,20 @@ fn run_session(cli: &Cli) -> ExitCode {
     };
     let _ = warnings;
     let mut service = MachineService::new();
+    let raw_text = match raw.to_toml_text() {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    service.set_config_source(raw_text);
+    service.set_machine_factory(std::sync::Arc::new(|config| {
+        let mut machine = demu_core::Machine::assemble(config.clone(), &assemble::demu_ctors())?;
+        machine.boot();
+        assemble::apply_nes_cartridge_wiring(&mut machine);
+        Ok(machine)
+    }));
     match demu_core::Machine::assemble(config, &assemble::demu_ctors()) {
         Ok(machine) => service.load_machine(machine),
         Err(e) => {
@@ -322,6 +338,8 @@ fn finish_session(service: &MachineService) -> ExitCode {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use demu_core::Tick;
+    use demu_shell::text::CommandOutputText as _;
 
     fn machine_for(triple: &str) -> demu_core::Machine {
         let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
@@ -411,6 +429,307 @@ pub mod tests {
             .map(|v| v.frames())
             .next()
             .unwrap_or(0)
+    }
+    /// The script text for the media tests: four joypad events at exact
+    /// ticks of the Game Boy's single domain.
+    const GB_SCRIPT: &str = "\
+# a scripted play window
+#main:100000 joypad press a
+#main:200000 joypad release a
+#main:300000 joypad press b   # holds through the window
+#main:500000 joypad release b
+";
+
+    /// A temp path cleared of any prior test artifact.
+    fn temp_media(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("demu-media-{name}"));
+        std::fs::remove_file(&path).ok();
+        path
+    }
+
+    /// A booted Game Boy on the configuration's own boot state.
+    fn gb_machine() -> demu_core::Machine {
+        let raw = demu_config::bundled::resolve_source("sm83-nintendo-gameboy").expect("config");
+        let (config, _) = demu_config::validate(&raw).expect("valid");
+        let mut machine =
+            demu_core::Machine::assemble(config, &assemble::demu_ctors()).expect("assembles");
+        machine.boot();
+        assemble::apply_nes_cartridge_wiring(&mut machine);
+        machine
+    }
+
+    #[test]
+    fn a_rejected_input_event_fails_loudly() {
+        // The script grammar validates the device and the domain; the
+        // event text itself fails at injection time, mid-run.
+        let mut service = service_with_rom();
+        service
+            .load_script("#main:1000 joypad press zzz\n")
+            .expect("the script loads");
+        let error = service
+            .step(200_000)
+            .expect_err("the unknown event text rejects");
+        assert!(
+            error.to_string().contains("rejected"),
+            "the error names the rejection: {error}"
+        );
+    }
+
+    #[test]
+    fn mkv_input_carries_events_and_the_config() {
+        let mut service = service_with_rom();
+        let raw =
+            demu_config::bundled::resolve_source("sm83-nintendo-gameboy").expect("raw config");
+        service.set_config_source(raw.to_toml_text().expect("render"));
+        let script = temp_media("input-script.txt");
+        std::fs::write(&script, GB_SCRIPT).expect("script writes");
+        let mkv = temp_media("input.mkv");
+        demu_shell::text::execute(
+            &mut service,
+            "mkv-input",
+            &format!("{} -o {}", script.display(), mkv.display()),
+        )
+        .expect("mkv-input");
+
+        let read = demu_mkv::read_input_file(&mkv).expect("read back");
+        assert_eq!(read.events.len(), 4, "the event blocks survive");
+        assert_eq!(read.events[0].domain, "main");
+        assert_eq!(read.events[0].device, "joypad");
+        assert_eq!(read.events[0].event, "press a");
+        assert_eq!(read.events[3].ticks, 500_000);
+        // The embedded configuration reconstructs the machine.
+        let raw_text = read.config_text.as_deref().expect("config tag");
+        let raw_copy = demu_config::RawConfig::parse(raw_text).expect("parses");
+        let (config, _) = demu_config::validate(&raw_copy).expect("validates");
+        assert_eq!(config.triple, "sm83-nintendo-gameboy");
+    }
+
+    #[test]
+    fn the_mkv_replay_reproduces_the_script_session_byte_identically() {
+        // A: the script drives the machine directly.
+        let mut machine_a = gb_machine();
+        let config = machine_a.config.clone();
+        let script = demu_core::script::InputScript::parse(GB_SCRIPT, &config)
+            .expect("the script parses and validates");
+        let mut scheduler_a = demu_core::script::InputScheduler::new(script);
+        demu_core::script::run_until_with_input(
+            &mut machine_a,
+            &mut scheduler_a,
+            Tick(600_000),
+            &mut |_| false,
+            true,
+        )
+        .expect("script session runs");
+        let mut state_a = Vec::new();
+        machine_a.save(&mut state_a).expect("save a");
+
+        // The script converts to Matroska and comes back.
+        let mkv = temp_media("replay.mkv");
+        let config_text = demu_config::bundled::resolve_source("sm83-nintendo-gameboy")
+            .expect("raw config")
+            .to_toml_text()
+            .expect("render");
+        demu_mkv::write_input_file(&mkv, &config, &config_text, &{
+            let script =
+                demu_core::script::InputScript::parse(GB_SCRIPT, &config).expect("reparse");
+            script.events().to_vec()
+        })
+        .expect("write input file");
+        let source = demu_mkv::read_input_file(&mkv).expect("read back");
+        let raw_text = source.config_text.as_deref().expect("config text");
+        let raw_copy = demu_config::RawConfig::parse(raw_text).expect("the config text parses");
+        let (config_b, _) = demu_config::validate(&raw_copy).expect("validates");
+        let mut machine_b =
+            demu_core::Machine::assemble(config_b, &assemble::demu_ctors()).expect("assembles");
+        machine_b.boot();
+        assemble::apply_nes_cartridge_wiring(&mut machine_b);
+        let schedule = demu_core::script::InputScript::from_events(source.events);
+        let mut scheduler_b = demu_core::script::InputScheduler::new(schedule);
+        demu_core::script::run_until_with_input(
+            &mut machine_b,
+            &mut scheduler_b,
+            Tick(600_000),
+            &mut |_| false,
+            true,
+        )
+        .expect("replay runs");
+        let mut state_b = Vec::new();
+        machine_b.save(&mut state_b).expect("save b");
+        assert_eq!(
+            state_a, state_b,
+            "the Matroska replay reproduces the script session byte-identically"
+        );
+    }
+
+    #[test]
+    fn render_session_records_deterministic_aligned_frames() {
+        let raw =
+            demu_config::bundled::resolve_source("sm83-nintendo-gameboy").expect("raw config");
+        let config_text = raw.to_toml_text().expect("render");
+
+        let first = temp_media("render-a.mkv");
+        let mut service = service_with_rom();
+        service.set_config_source(config_text.clone());
+        demu_shell::text::execute(&mut service, "render-session", "3 -o")
+            .expect_err("the output file is required");
+        demu_shell::text::execute(
+            &mut service,
+            "render-session",
+            &format!("3 -o {}", first.display()),
+        )
+        .expect("render-session runs");
+
+        let second = temp_media("render-b.mkv");
+        let mut service_b = service_with_rom();
+        service_b.set_config_source(config_text);
+        demu_shell::text::execute(
+            &mut service_b,
+            "render-session",
+            &format!("3 -o {}", second.display()),
+        )
+        .expect("render-session runs again");
+        let bytes_a = std::fs::read(&first).expect("read a");
+        let bytes_b = std::fs::read(&second).expect("read b");
+        assert_eq!(
+            bytes_a, bytes_b,
+            "identical sessions record identical files"
+        );
+
+        // Three clusters, one per emulated display frame, with strictly
+        // increasing nanosecond timestamps and a frame-period spacing.
+        let clusters = demu_mkv::read_clusters(&first).expect("read clusters");
+        assert_eq!(clusters.len(), 3, "one cluster per display frame");
+        assert!(clusters[0].timestamp_ns > 0, "the first frame completed");
+        for window in clusters.windows(2) {
+            assert!(window[0].timestamp_ns < window[1].timestamp_ns);
+            let delta = window[1].timestamp_ns - window[0].timestamp_ns;
+            assert!(
+                (10_000_000..=100_000_000).contains(&delta),
+                "frame spacing {delta} ns"
+            );
+        }
+
+        // Each video block decodes losslessly to the frame the equal
+        // replay captures at that vblank: one frame per emulated frame.
+        let mut replay = service_with_rom();
+        for (index, cluster) in clusters.iter().enumerate() {
+            replay.run_frame(1).expect("replay frame");
+            let captured = replay
+                .machine()
+                .expect("machine")
+                .devices
+                .iter()
+                .find_map(|d| d.video())
+                .and_then(|v| v.frame())
+                .expect("frame")
+                .clone();
+            let video_block = cluster
+                .blocks
+                .iter()
+                .find(|(track, _)| *track == 2)
+                .map(|(_, payload)| payload)
+                .expect("video block");
+            let decoded =
+                demu_mkv::ffv1::decode_frame(captured.width, captured.height, video_block)
+                    .expect("video decodes");
+            assert_eq!(
+                decoded, captured.pixels,
+                "cluster {index} decodes to the emulated frame"
+            );
+        }
+    }
+
+    #[test]
+    fn mkv_render_rebuilds_the_machine_and_replays_the_events() {
+        // The input form carries the configuration and the events.
+        let mkv = temp_media("render-input.mkv");
+        {
+            let config = gb_machine().config.clone();
+            let script =
+                demu_core::script::InputScript::parse(GB_SCRIPT, &config).expect("script parses");
+            let config_text = demu_config::bundled::resolve_source("sm83-nintendo-gameboy")
+                .expect("raw config")
+                .to_toml_text()
+                .expect("render");
+            demu_mkv::write_input_file(&mkv, &config, &config_text, script.events())
+                .expect("writes");
+        }
+
+        // The command rebuilds the machine from the file and replays.
+        let mut service = MachineService::new();
+        let raw = demu_config::bundled::resolve_source("sm83-nintendo-gameboy").expect("raw");
+        service.set_config_source(raw.to_toml_text().expect("render"));
+        service.set_machine_factory(std::sync::Arc::new(|config| {
+            let mut machine =
+                demu_core::Machine::assemble(config.clone(), &assemble::demu_ctors())?;
+            machine.boot();
+            assemble::apply_nes_cartridge_wiring(&mut machine);
+            Ok(machine)
+        }));
+        let output = temp_media("render-output.mkv");
+        // The four events span 500_000 ticks; at 16.74 ms a frame, 20
+        // emulated display frames cover the window.
+        let render = demu_shell::text::execute(
+            &mut service,
+            "mkv-render",
+            &format!("{} 20 -o {}", mkv.display(), output.display()),
+        )
+        .expect("mkv-render runs");
+        assert!(render.text().contains("20"));
+
+        // The replayed state matches a direct script session at the
+        // same vblank count. The twin repeats the recording loop
+        // without the writer: one display frame per round, events at
+        // their exact instants.
+        let mut twin = gb_machine();
+        {
+            let config = twin.config.clone();
+            let script =
+                demu_core::script::InputScript::parse(GB_SCRIPT, &config).expect("script parses");
+            let mut scheduler = demu_core::script::InputScheduler::new(script);
+            for _ in 0..20 {
+                let mut vblanks = 0u64;
+                let mut hook = |event: &demu_core::TriggerEvent| {
+                    if matches!(event, demu_core::TriggerEvent::Vblank) {
+                        vblanks += 1;
+                    }
+                    vblanks >= 1
+                };
+                if scheduler.pending() == 0 {
+                    twin.run_hook(Tick(u64::MAX), &mut hook, true);
+                } else {
+                    demu_core::script::run_until_with_input(
+                        &mut twin,
+                        &mut scheduler,
+                        Tick(u64::MAX),
+                        &mut hook,
+                        true,
+                    )
+                    .expect("segment");
+                }
+            }
+        }
+
+        // The rendered machine and the twin agree.
+        let rendered = service.machine().expect("machine");
+        let mut rendered_state = Vec::new();
+        rendered.save(&mut rendered_state).expect("save rendered");
+        let mut twin_state = Vec::new();
+        twin.save(&mut twin_state).expect("save twin");
+        assert_eq!(
+            rendered_state, twin_state,
+            "the rendered replay matches the direct script session"
+        );
+
+        // The output carries the three tracks with the same cluster
+        // count and strictly increasing timestamps.
+        let clusters = demu_mkv::read_clusters(&output).expect("read clusters");
+        assert_eq!(clusters.len(), 20);
+        assert!(
+            clusters
+                .windows(2)
+                .all(|w| w[0].timestamp_ns < w[1].timestamp_ns)
+        );
     }
 }
 
@@ -2019,10 +2338,17 @@ pub mod vl65_machine_tests {
         // through it at its own position.
         assert_eq!(machine.peek("cpu", demu_core::Address(0xFE00)), 0x00);
         assert_eq!(machine.peek("cpu", demu_core::Address(0xFE15)), 0xA9);
-        // The core stopped on the copied STP byte: the stopped run
-        // returned, with the park state holding the stop byte's
-        // position.
-        assert!(machine.now() < Tick(4 * 200), "the stopped run ended early");
+        // The core stopped on the copied STP byte: the run returned with
+        // the park state holding the stop byte's position. A parked core
+        // declares no next event, and the finish tick reports the
+        // requested run boundary because the idle window let the primary
+        // clock pass.
+        assert!(machine.now() <= Tick(4 * 200), "the stopped run returned");
+        assert_eq!(
+            machine.device_by_name("cpu0").and_then(|d| d.next_event()),
+            None,
+            "the STP parked the core"
+        );
         assert_eq!(cpu_pc_of(&machine), 0xFE1B);
     }
 

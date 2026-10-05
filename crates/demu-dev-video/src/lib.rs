@@ -569,9 +569,9 @@ impl Ppu {
                 }
                 _ => {}
             },
-            144 => {
-                self.enter_mode(1, tick, ctx);
-            }
+            // The vblank edge fires once, on the line's first dot; the
+            // rest of the line is still mode 1 without new events.
+            144 if self.line_dot() == 0 => self.enter_mode(1, tick, ctx),
             _ => {}
         }
         if self.line_dot() == 0 {

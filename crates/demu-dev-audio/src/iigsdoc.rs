@@ -332,6 +332,10 @@ impl Device for IigsDoc {
         Some(self)
     }
 
+    fn audio_mut(&mut self) -> Option<&mut dyn demu_core::AudioSource> {
+        Some(self)
+    }
+
     fn input_mut(&mut self) -> Option<&mut dyn InputSink> {
         Some(self)
     }

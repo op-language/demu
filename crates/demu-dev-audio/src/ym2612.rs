@@ -1643,6 +1643,10 @@ impl Device for Ym2612 {
         Some(self)
     }
 
+    fn audio_mut(&mut self) -> Option<&mut dyn demu_core::AudioSource> {
+        Some(self)
+    }
+
     fn reset(&mut self) {
         // The power-up form: registers rest at zero, envelopes rest
         // quiet and released, the timers stopped, the LFO off and

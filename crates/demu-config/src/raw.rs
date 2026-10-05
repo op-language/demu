@@ -260,6 +260,22 @@ impl RawConfig {
             message: e.message().to_string(),
         })
     }
+
+    /// Render the document back to TOML text.
+    ///
+    /// The render is the canonical merged form: an `extends` chain has
+    /// already resolved to its merged raw document, so the text a media
+    /// file carries reconstructs the machine without the base file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`crate::error::ConfigError`] when a value cannot
+    /// serialize.
+    pub fn to_toml_text(&self) -> Result<String, crate::error::ConfigError> {
+        toml::to_string(self).map_err(|e| crate::error::ConfigError::TomlParse {
+            message: format!("failed to serialize the configuration: {e}"),
+        })
+    }
 }
 
 impl SystemSpec {
@@ -336,6 +352,22 @@ impl ConnectionSpec {
             to: to.to_string(),
             semantics,
             direction: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::RawConfig;
+
+    #[test]
+    fn the_rendered_text_round_trips_through_parse_and_validation() {
+        for triple in ["sm83-nintendo-gameboy", "rp2A03-nintendo-nes-ntsc"] {
+            let raw = crate::bundled::resolve_source(triple).expect("bundled raw");
+            let text = raw.to_toml_text().expect("renders");
+            let back = RawConfig::parse(&text).expect("the rendered text parses");
+            let (config, _) = crate::validate(&back).expect("the rendered text validates");
+            assert_eq!(config.triple, triple, "{triple} round trips");
         }
     }
 }

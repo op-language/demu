@@ -16,6 +16,7 @@ fn code_of(e: &CommandError) -> ErrorCode {
         CommandError::BadArgs(_) => ErrorCode::BadArgs,
         CommandError::BadAddress(_) => ErrorCode::BadAddress,
         CommandError::BadTrigger(_) => ErrorCode::BadTrigger,
+        CommandError::BadScript(_) => ErrorCode::BadScript,
         CommandError::Unknown("register", _) => ErrorCode::UnknownRegister,
         CommandError::Unknown(_, _) => ErrorCode::UnknownDevice,
         CommandError::NoMachine => ErrorCode::NoMachine,

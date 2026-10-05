@@ -237,6 +237,68 @@ pub fn dispatch(
             };
             service.inject(device, &event.join(" "))
         }
+        "script" => {
+            let [path] = words.as_slice() else {
+                return Err(CommandError::BadArgs("usage: script <file>".to_string()));
+            };
+            let text =
+                std::fs::read_to_string(path).map_err(|e| CommandError::Io(e.to_string()))?;
+            service.load_script(&text)
+        }
+        "mkv-input" => {
+            let (positional, out) =
+                positional_and_output(&words, "usage: mkv-input <script> -o <file>")?;
+            let [script_path] = positional.as_slice() else {
+                return Err(CommandError::BadArgs(
+                    "usage: mkv-input <script> -o <file>".to_string(),
+                ));
+            };
+            let Some(out_path) = out else {
+                return Err(CommandError::BadArgs(
+                    "usage: mkv-input <script> -o <file>".to_string(),
+                ));
+            };
+            service.mkv_input(script_path, out_path)
+        }
+        "mkv-render" => {
+            let (positional, out) = positional_and_output(
+                &words,
+                "usage: mkv-render <input.mkv> <frames> -o <output.mkv>",
+            )?;
+            let [input_path, frames] = positional.as_slice() else {
+                return Err(CommandError::BadArgs(
+                    "usage: mkv-render <input.mkv> <frames> -o <output.mkv>".to_string(),
+                ));
+            };
+            let frame_count = demu_config::model::parse_number(frames)
+                .ok_or_else(|| CommandError::BadArgs(format!("not a number: {frames}")))?;
+            let Some(out_path) = out else {
+                return Err(CommandError::BadArgs(
+                    "usage: mkv-render <input.mkv> <frames> -o <output.mkv>".to_string(),
+                ));
+            };
+            service.mkv_render(input_path, frame_count, out_path)
+        }
+        "render-session" => {
+            let (positional, out) =
+                positional_and_output(&words, "usage: render-session <frames> -o <file>")?;
+            let frames = match positional.as_slice() {
+                [] => 0,
+                [frames] => demu_config::model::parse_number(frames)
+                    .ok_or_else(|| CommandError::BadArgs(format!("not a number: {frames}")))?,
+                _ => {
+                    return Err(CommandError::BadArgs(
+                        "usage: render-session <frames> -o <file>".to_string(),
+                    ));
+                }
+            };
+            let Some(out_path) = out else {
+                return Err(CommandError::BadArgs(
+                    "usage: render-session <frames> -o <file>".to_string(),
+                ));
+            };
+            service.render_session(frames, out_path)
+        }
         "watch" => {
             let [token] = words.as_slice() else {
                 return Err(CommandError::BadArgs(
@@ -352,6 +414,36 @@ fn hex_bytes(words: &[&str]) -> Option<Vec<u8>> {
         out.push(byte);
     }
     Some(out)
+}
+
+/// Split the `-o <path>` output flag out of the words; the rest are
+/// positional.
+fn positional_and_output<'a>(
+    words: &[&'a str],
+    usage: &str,
+) -> Result<(Vec<&'a str>, Option<&'a str>), CommandError> {
+    let mut positional = Vec::new();
+    let mut out = None;
+    let mut i = 0usize;
+    while i < words.len() {
+        match words[i] {
+            "-o" => {
+                if out.is_some() {
+                    return Err(CommandError::BadArgs(format!("only one -o: {usage}")));
+                }
+                let path = words
+                    .get(i + 1)
+                    .ok_or_else(|| CommandError::BadArgs(usage.to_string()))?;
+                out = Some(*path);
+                i += 2;
+            }
+            other => {
+                positional.push(other);
+                i += 1;
+            }
+        }
+    }
+    Ok((positional, out))
 }
 
 fn info_text(json: serde_json::Value) -> crate::service::CommandOutput {
