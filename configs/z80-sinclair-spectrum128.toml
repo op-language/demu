@@ -1,0 +1,159 @@
+# Sinclair ZX Spectrum 128K, the banked extension of the 48K config.
+#
+# This machine extends `z80-sinclair-spectrum`: the same ULA model
+# with the 228 T-state scanline of the 311-scanline frame. The memory
+# map follows the published 128K form: banks 5 and 2 stay fixed at
+# $4000-$7FFF and $8000-$BFFF as plain RAM; the paged door sits at
+# $C000-$FFFF on the memory-controller die `zx.bankram`, which holds
+# the six non-resident banks {0, 1, 3, 4, 6, 7} of its own storage
+# and answers the paging port $7FFD. The door drives the
+# `contend_page` line (high when the paged bank is 1, 3, 5, or 7), the
+# `rom_bank` line to the two-page ROM, and the `shadow` line to the
+# ULA. The CPU keeps the $4000-$7FFF contended range and takes the
+# banked-page contention through the line. The contention window runs
+# from the frame T-state 14361 to 58140 with the phase at 14361. The
+# ULA renders the shadow screen from the bank the door pages when the
+# shadow bit latches; the bundled form pairs bank 7 with the shadow
+# bit, the published usage.
+
+[system]
+name = "Sinclair ZX Spectrum 128K"
+triple = "z80-sinclair-spectrum"
+description = "The Sinclair ZX Spectrum 128K with the banked memory controller, the paging port, and the two-page ROM."
+
+[extends]
+base = "z80-sinclair-spectrum"
+
+# The PAL crystal of the 128K: one scanline is 228 T-states and one
+# frame 70,908 over 311 lines. The banked map replaces the plain
+# screen-bank device with the memory-controller die and serves the
+# paged door over $C000-$FFFF with the paging port $7FFD; the two
+# plain 16 KiB devices of the base machine stay wired below the
+# door's overlay priority, so the die answers every banked span.
+[clock.main]
+frequency = "3546895"
+
+[[device]]
+name = "cpu0"
+kind = "z80.cpu"
+domain = "main"
+[device.dividers]
+cpu = 1
+[device.params]
+bus = "cpu"
+io_bus = "io"
+contended = "0x4000-0x8000"
+io_contend = "0x40-0x80"
+contend_from = 14361
+contend_to = 58140
+contend_base = 14361
+
+[[device]]
+name = "u0"
+kind = "zx.ula"
+domain = "main"
+[device.params]
+form = "spectrum"
+line_t = 228
+frame_lines = 311
+
+[[device]]
+name = "ram_a"
+kind = "zx.bankram"
+domain = "main"
+
+[[device]]
+name = "ram_b"
+kind = "z80.ram"
+domain = "main"
+[device.params]
+size = 16384
+
+[[device]]
+name = "ram_c"
+kind = "z80.ram"
+domain = "main"
+[device.params]
+size = 16384
+
+[[window]]
+name = "w_ram_a"
+bus = "cpu"
+device = "ram_a"
+base = "0x4000"
+size = "0x4000"
+
+[[window]]
+name = "w_ram_b"
+bus = "cpu"
+device = "ram_b"
+base = "0x8000"
+size = "0x4000"
+
+[[window]]
+name = "w_ram_c"
+bus = "cpu"
+device = "ram_c"
+base = "0xC000"
+size = "0x4000"
+overlay = "door"
+overlay_read_priority = 2
+overlay_write_priority = 2
+
+[[window]]
+name = "w_door"
+bus = "cpu"
+device = "ram_a"
+base = "0xC000"
+size = "0x4000"
+overlay = "door"
+overlay_read_priority = 3
+overlay_write_priority = 3
+
+[[window]]
+name = "w_paging"
+bus = "io"
+device = "ram_a"
+base = "0x17FFD"
+size = "0x0001"
+overlay = "paging"
+overlay_read_priority = 2
+overlay_write_priority = 2
+
+[[connection]]
+from = "u0.int"
+to = "cpu0.int"
+semantics = "irq"
+
+[[connection]]
+from = "cpu0.halt"
+to = "u0.halt"
+semantics = "display-sync"
+
+[[connection]]
+from = "ram_a.contend_page"
+to = "cpu0.contend_page"
+semantics = "display-sync"
+
+[[connection]]
+from = "ram_a.rom_bank"
+to = "rom0.select"
+semantics = "display-sync"
+
+[[connection]]
+from = "ram_a.shadow"
+to = "u0.shadow"
+semantics = "display-sync"
+
+[boot.ram_a]
+pattern = "zero"
+
+[boot.rom0]
+hex = """f3760000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018fe"""
+
+[boot.ram_b]
+pattern = "zero"
+
+[boot.ram_c]
+pattern = "zero"
+

@@ -1,8 +1,9 @@
 //! The video device family: the SM83 PPU, the NES PPU, the Atari TIA,
 //! CTIA/GTIA, MARIA, and ANTIC, the VIC-II, the Apple II video, the
-//! SNES S-PPU1/PPU2, the Atari Lynx Suzy die, and the PC Engine
+//! SNES S-PPU1/PPU2, the Atari Lynx Suzy die, the PC Engine
 //! HuC6270 Video Display Controller with its HuC6260 Video Color
-//! Encoder.
+//! Encoder, the TMS9918A family display processor with the Sega mode-4
+//! descendants, and the TI-85 liquid-crystal display driver.
 //!
 //! The SM83 pixel processing unit walks one dot per domain tick,
 //! 70224 dots per frame across 154 lines. Modes 2, 3, and 0 share the
@@ -19,7 +20,9 @@ pub mod maria;
 pub mod nes;
 pub mod pce;
 pub mod snesppu;
+pub mod ti85;
 pub mod tia;
+pub mod tms;
 pub mod vic;
 
 pub use antic::Antic;
@@ -29,8 +32,10 @@ pub use maria::Maria;
 pub use nes::NesPpu;
 pub use pce::{PceVce, PceVdc};
 pub use snesppu::SnesPpu;
+pub use ti85::Ti85Lcd;
 pub use tia::Tia;
 pub use tia::color_rgb as tia_color_rgb;
+pub use tms::Vdp;
 pub use vic::Vic;
 
 use demu_config::model::BootState;

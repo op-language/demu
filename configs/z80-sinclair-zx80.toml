@@ -1,0 +1,104 @@
+# Sinclair ZX80, the canonical system configuration.
+#
+# The ZX80 runs one 3.25 MHz domain. The ULA of the ZX80 form drives
+# one non-maskable interrupt per frame; the display builds from the
+# display file the ROM walks itself in its fast form, with the ULA
+# rendering each display line of the 32x24 display from the display
+# file and the character ROM through the published line schedule. The
+# keyboard reads through the ULA port with the high address byte
+# choosing the half-row. The 4 KiB monitor ROM and the 1 KiB work RAM
+# map plainly. The hex boot plants DI; HALT at the reset address with
+# the idle loop at the NMI address 0x0066, so the bundled machine parks
+# through the frame non-maskable edges.
+
+[system]
+name = "Sinclair ZX80"
+triple = "z80-sinclair-zx80"
+description = "The Sinclair ZX80 with the ULA form of the ZX80, the 4 KiB ROM space, and the 1 KiB work RAM."
+
+[clock.main]
+frequency = "3250000"
+origin = "the published 3.25 MHz ULA clock; one scanline is 208 T-states"
+
+[[device]]
+name = "cpu0"
+kind = "z80.cpu"
+domain = "main"
+[device.dividers]
+cpu = 1
+[device.params]
+bus = "cpu"
+io_bus = "io"
+
+[[device]]
+name = "u0"
+kind = "zx.ula"
+domain = "main"
+[device.params]
+form = "zx80"
+line_t = 208
+frame_lines = 310
+
+[[device]]
+name = "rom0"
+kind = "z80.rom"
+domain = "main"
+[device.params]
+size = 4096
+
+[[device]]
+name = "ram0"
+kind = "z80.ram"
+domain = "main"
+[device.params]
+size = 1024
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[bus]]
+name = "io"
+address_bits = 17
+owner = "cpu0"
+
+[[window]]
+name = "w_ula"
+bus = "io"
+device = "u0"
+base = "0x10000"
+size = "0x10000"
+
+[[window]]
+name = "w_rom"
+bus = "cpu"
+device = "rom0"
+base = "0x0000"
+size = "0x1000"
+
+[[window]]
+name = "w_ram"
+bus = "cpu"
+device = "ram0"
+base = "0x4000"
+size = "0x0400"
+
+[[connection]]
+from = "u0.nmi"
+to = "cpu0.nmi"
+semantics = "irq"
+
+[[connection]]
+from = "cpu0.halt"
+to = "u0.halt"
+semantics = "display-sync"
+
+[boot.cpu0]
+registers = { pc = "0x0000" }
+
+[boot.rom0]
+hex = """f3760000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018fe"""
+
+[boot.ram0]
+pattern = "zero"

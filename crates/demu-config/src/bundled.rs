@@ -76,6 +76,30 @@ pub const LYNX: &str = include_str!("../../../configs/vl65nc02-atari-lynx.toml")
 /// The PC Engine.
 pub const PCENGINE: &str = include_str!("../../../configs/mos6502-nec-pcengine.toml");
 
+/// The Sega SG-1000.
+pub const SG1000: &str = include_str!("../../../configs/z80-sega-sg1000.toml");
+
+/// The Sega Master System.
+pub const MASTERSYSTEM: &str = include_str!("../../../configs/z80-sega-mastersystem.toml");
+
+/// The Sega Game Gear.
+pub const GAMEGEAR: &str = include_str!("../../../configs/z80-sega-gamegear.toml");
+
+/// The Sinclair ZX80.
+pub const ZX80: &str = include_str!("../../../configs/z80-sinclair-zx80.toml");
+
+/// The Sinclair ZX81.
+pub const ZX81: &str = include_str!("../../../configs/z80-sinclair-zx81.toml");
+
+/// The Sinclair ZX Spectrum 48K.
+pub const SPECTRUM: &str = include_str!("../../../configs/z80-sinclair-spectrum.toml");
+
+/// The Sinclair ZX Spectrum 128K, the banked extension of the 48K.
+pub const SPECTRUM128: &str = include_str!("../../../configs/z80-sinclair-spectrum128.toml");
+
+/// The Texas Instruments TI-85.
+pub const TI85: &str = include_str!("../../../configs/z80-ti-85.toml");
+
 /// A bundled config source: the triple name and the embedded text.
 pub struct BundledConfig {
     /// The triple name that selects this config.
@@ -173,6 +197,38 @@ pub const BUNDLED: &[BundledConfig] = &[
     BundledConfig {
         triple: "mos6502-nec-pcengine",
         text: PCENGINE,
+    },
+    BundledConfig {
+        triple: "z80-sega-sg1000",
+        text: SG1000,
+    },
+    BundledConfig {
+        triple: "z80-sega-mastersystem",
+        text: MASTERSYSTEM,
+    },
+    BundledConfig {
+        triple: "z80-sega-gamegear",
+        text: GAMEGEAR,
+    },
+    BundledConfig {
+        triple: "z80-sinclair-zx80",
+        text: ZX80,
+    },
+    BundledConfig {
+        triple: "z80-sinclair-zx81",
+        text: ZX81,
+    },
+    BundledConfig {
+        triple: "z80-sinclair-spectrum",
+        text: SPECTRUM,
+    },
+    BundledConfig {
+        triple: "z80-sinclair-spectrum128",
+        text: SPECTRUM128,
+    },
+    BundledConfig {
+        triple: "z80-ti-85",
+        text: TI85,
     },
 ];
 

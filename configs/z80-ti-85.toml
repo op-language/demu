@@ -1,0 +1,127 @@
+# Texas Instruments TI-85, the canonical system configuration.
+#
+# The TI-85 runs one 6 MHz domain with no divider splits. The memory
+# controller die holds the 128 KiB ROM in eight 16 KiB pages and the
+# 32 KiB RAM in two 16 KiB banks; the published page map applies:
+# $0000-$3FFF follows the ROM page latch on port $08, $4000-$7FFF
+# holds ROM page 0, $8000-$BFFF follows the RAM bank latch on port
+# $06, and $C000-$FFFF follows the RAM bank latch on port $07. The
+# link port answers port $05 with the two gray-coded lines. The LCD
+# driver answers the top of the memory space: the 128x64 one-bit-per-
+# pixel display buffer at $FC00-$FFFF with its driver page inside at
+# $FEC0-$FEFF; the driver page wins the overlap, and the display
+# bytes under it stay unreachable in this driver row form, the
+# recorded as-built layout. The hex boot plants DI; HALT at the reset
+# address; the calculator carries no interrupt sources in this build.
+
+[system]
+name = "Texas Instruments TI-85"
+triple = "z80-ti-85"
+description = "The TI-85 with the memory controller die, the memory-mapped LCD driver with the keypad, and the link port."
+
+[clock.main]
+frequency = "6000000"
+origin = "the published 6 MHz Z80 clock"
+
+[[device]]
+name = "cpu0"
+kind = "z80.cpu"
+domain = "main"
+[device.dividers]
+cpu = 1
+[device.params]
+bus = "cpu"
+io_bus = "io"
+
+[[device]]
+name = "mem0"
+kind = "ti85.mem"
+domain = "main"
+
+[[device]]
+name = "lcd0"
+kind = "ti85.lcd"
+domain = "main"
+
+[[device]]
+name = "link0"
+kind = "ti85.link"
+domain = "main"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[bus]]
+name = "io"
+address_bits = 17
+owner = "cpu0"
+
+[[window]]
+name = "w_mem_low"
+bus = "cpu"
+device = "mem0"
+base = "0x0000"
+size = "0x4000"
+
+[[window]]
+name = "w_mem_mid"
+bus = "cpu"
+device = "mem0"
+base = "0x4000"
+size = "0x4000"
+
+[[window]]
+name = "w_mem_high"
+bus = "cpu"
+device = "mem0"
+base = "0x8000"
+size = "0x4000"
+
+[[window]]
+name = "w_mem_top"
+bus = "cpu"
+device = "mem0"
+base = "0xC000"
+size = "0x4000"
+
+[[window]]
+name = "w_display"
+bus = "cpu"
+device = "lcd0"
+base = "0xFC00"
+size = "0x0400"
+overlay = "lcd"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_driver"
+bus = "cpu"
+device = "lcd0"
+base = "0xFEC0"
+size = "0x0040"
+overlay = "lcd"
+overlay_read_priority = 2
+overlay_write_priority = 2
+
+[[window]]
+name = "w_link"
+bus = "io"
+device = "link0"
+base = "0x10005"
+size = "0x0001"
+
+[[window]]
+name = "w_memports"
+bus = "io"
+device = "mem0"
+base = "0x10006"
+size = "0x0003"
+
+[boot.cpu0]
+registers = { pc = "0x0000" }
+
+[boot.mem0]
+hex = """f3760000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018fe"""

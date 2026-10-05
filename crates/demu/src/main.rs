@@ -2502,3 +2502,1187 @@ pub mod pce_machine_tests {
         assert_eq!(machine.peek("cpu", demu_core::Address(0x1FF000)), 0x3F);
     }
 }
+
+/// The Z80 machine group: the Sega 8-bit consoles, the Sinclair
+/// machines, and the TI-85, end to end over the machine assembly.
+#[cfg(test)]
+pub mod z80_machine_tests {
+    use crate::assemble;
+    use demu_core::AudioSource as _;
+    use demu_core::Tick;
+    use demu_core::machine::Machine;
+
+    /// Assemble a machine from a raw TOML document and boot it.
+    fn machine_of(raw: String) -> Machine {
+        let parsed = demu_config::RawConfig::parse(&raw).expect("mini config parses");
+        let (config, warnings) = demu_config::validate(&parsed).expect("mini config validates");
+        for w in warnings {
+            eprintln!("warning: {} - {}", w.code, w.message);
+        }
+        let mut machine =
+            Machine::assemble(config, &assemble::demu_ctors()).expect("mini machine assembles");
+        machine.boot();
+        machine
+    }
+
+    /// The hex text of a byte image.
+    fn hex_of(image: &[u8]) -> String {
+        let mut hex = String::new();
+        for b in image.iter() {
+            hex.push_str(&format!("{b:02x}"));
+        }
+        hex
+    }
+
+    /// The CPU register value of the machine's first CPU.
+    fn cpu_reg(machine: &Machine, name: &str) -> u64 {
+        machine
+            .devices
+            .iter()
+            .find_map(|d| d.cpu())
+            .expect("a cpu")
+            .registers()
+            .get(name)
+            .copied()
+            .expect("register")
+    }
+
+    fn cpu_pc_of(machine: &Machine) -> u16 {
+        u16::try_from(cpu_reg(machine, "PC")).expect("pc fits")
+    }
+
+    /// A 48K Spectrum mini machine with `body_hex` planted at the boot
+    /// pc and `a` in the accumulator at boot.
+    ///
+    /// The RAM devices split the 48 KiB space, so the body plants
+    /// inside the device whose window covers the pc.
+    fn spectrum48_of(name: &str, pc: u64, a: u8, body_hex: &str) -> Machine {
+        let index = (pc - 0x4000) as usize;
+        let mut hex_a = String::new();
+        let mut hex_b = String::new();
+        let mut hex_c = String::new();
+        let target = match index / 0x4000 {
+            0 => &mut hex_a,
+            1 => &mut hex_b,
+            _ => &mut hex_c,
+        };
+        for _ in 0..(index % 0x4000) {
+            target.push_str("00");
+        }
+        target.push_str(body_hex);
+        let pc_str = format!("0x{pc:04X}");
+        let raw = format!(
+            r#"
+        [system]
+        name = "{name}"
+        triple = "z80-sinclair-spectrum"
+        [clock.main]
+        frequency = "3500000"
+        [[device]]
+        name = "cpu0"
+        kind = "z80.cpu"
+        domain = "main"
+        [device.dividers]
+        cpu = 1
+        [device.params]
+        bus = "cpu"
+        io_bus = "io"
+        contended = "0x4000-0x8000,0xE000-0x10000"
+        io_contend = "0x40-0x80"
+        contend_from = 14336
+        contend_to = 57344
+        contend_base = 14344
+        [[device]]
+        name = "u0"
+        kind = "zx.ula"
+        domain = "main"
+        [device.params]
+        form = "spectrum"
+        line_t = 224
+        frame_lines = 312
+        [[device]]
+        name = "rom0"
+        kind = "z80.rom"
+        domain = "main"
+        [device.params]
+        size = 16384
+        [[device]]
+        name = "ram_a"
+        kind = "z80.ram"
+        domain = "main"
+        [device.params]
+        size = 16384
+        [[device]]
+        name = "ram_b"
+        kind = "z80.ram"
+        domain = "main"
+        [device.params]
+        size = 16384
+        [[device]]
+        name = "ram_c"
+        kind = "z80.ram"
+        domain = "main"
+        [device.params]
+        size = 16384
+        [[bus]]
+        name = "cpu"
+        address_bits = 16
+        owner = "cpu0"
+        [[bus]]
+        name = "io"
+        address_bits = 17
+        owner = "cpu0"
+        [[window]]
+        name = "w_ula"
+        bus = "io"
+        device = "u0"
+        base = "0x10000"
+        size = "0x10000"
+        [[window]]
+        name = "w_rom"
+        bus = "cpu"
+        device = "rom0"
+        base = "0x0000"
+        size = "0x4000"
+        [[window]]
+        name = "w_ram_a"
+        bus = "cpu"
+        device = "ram_a"
+        base = "0x4000"
+        size = "0x4000"
+        [[window]]
+        name = "w_ram_b"
+        bus = "cpu"
+        device = "ram_b"
+        base = "0x8000"
+        size = "0x4000"
+        [[window]]
+        name = "w_ram_c"
+        bus = "cpu"
+        device = "ram_c"
+        base = "0xC000"
+        size = "0x4000"
+        [[connection]]
+        from = "u0.int"
+        to = "cpu0.int"
+        semantics = "irq"
+        [[connection]]
+        from = "cpu0.halt"
+        to = "u0.halt"
+        semantics = "display-sync"
+        [boot.cpu0]
+        registers = {{ pc = "{pc_str}", a = "{a:#04x}" }}
+        [boot.rom0]
+        hex = "f376"
+        [boot.ram_a]
+        hex = "{hex_a}"
+        [boot.ram_b]
+        hex = "{hex_b}"
+        [boot.ram_c]
+        hex = "{hex_c}"
+        "#,
+            name = name,
+            pc_str = pc_str,
+            a = a,
+            hex_a = hex_a,
+            hex_b = hex_b,
+            hex_c = hex_c,
+        );
+        machine_of(raw)
+    }
+
+    /// The opcode fetches of the loop at `loop_pc` inside one frame.
+    ///
+    /// The refresh register wraps every 128 fetches and cannot rank a
+    /// frame of thousands of fetches. The core emits one Fetch event
+    /// per opcode fetch instead, so the event totals measure the run
+    /// pace.
+    fn frame_fetches(machine: &mut Machine, loop_pc: u16) -> u64 {
+        use std::cell::Cell;
+        let count = Cell::new(0u64);
+        machine.run_hook(
+            Tick(69888 + 500),
+            &mut |event| {
+                if let demu_core::triggers::TriggerEvent::Fetch(address) = event
+                    && address.0 as u16 == loop_pc
+                {
+                    count.set(count.get() + 1);
+                }
+                false
+            },
+            true,
+        );
+        count.get()
+    }
+
+    /// One pixel of a video device's published frame.
+    fn pixel_of(machine: &Machine, device: &str, x: u32, y: u32) -> [u8; 3] {
+        let f = machine
+            .device_by_name(device)
+            .and_then(|d| d.video())
+            .expect("video device")
+            .frame()
+            .expect("published frame")
+            .clone();
+        let i = ((y * f.width + x) * 3) as usize;
+        [f.pixels[i], f.pixels[i + 1], f.pixels[i + 2]]
+    }
+
+    /// Inject one input event at one device of the machine.
+    fn inject_event(machine: &mut Machine, device: &str, event: &str) {
+        let ok = machine
+            .device_by_name_mut(device)
+            .and_then(|d| d.input_mut())
+            .map(|s| s.inject(event))
+            .unwrap_or(false);
+        assert!(ok, "the device {device} took the event {event}");
+    }
+
+    /// The frames published by one video device.
+    fn frames_of(machine: &Machine, device: &str) -> u64 {
+        machine
+            .device_by_name(device)
+            .and_then(|d| d.video())
+            .map(|v| v.frames())
+            .expect("frames")
+    }
+
+    /// The Sega mini machine: the core, the PSG, the pad with the
+    /// named form, the work RAM, and the named-form VDP, over the
+    /// two-bus shape with the mirrored port windows.
+    fn sega_mini(vdp_kind: &str, pad_form: &str, extra: &str, image: &[u8]) -> Machine {
+        let hex = hex_of(image);
+        let raw = format!(
+            r#"
+        [system]
+        name = "z80-sega-mini"
+        triple = "z80-sega-sg1000"
+        [clock.main]
+        frequency = "10738635"
+        [[device]]
+        name = "cpu0"
+        kind = "z80.cpu"
+        domain = "main"
+        [device.dividers]
+        cpu = 3
+        [device.params]
+        bus = "cpu"
+        io_bus = "io"
+        [[device]]
+        name = "vdp"
+        kind = "{vdp_kind}"
+        domain = "main"
+        [device.dividers]
+        dot = 2
+        [[device]]
+        name = "psg"
+        kind = "sn76489.psg"
+        domain = "main"
+        [device.dividers]
+        psg = 48
+        [[device]]
+        name = "pad"
+        kind = "sega.io"
+        domain = "main"
+        [device.params]
+        form = "{pad_form}"
+        [[device]]
+        name = "ram0"
+        kind = "z80.ram"
+        domain = "main"
+        [device.params]
+        size = 8192
+        [[device]]
+        name = "cart"
+        kind = "sega.cart"
+        domain = "main"
+        [device.params]
+        form = "sg1000"
+        [[bus]]
+        name = "cpu"
+        address_bits = 16
+        owner = "cpu0"
+        [[bus]]
+        name = "io"
+        address_bits = 17
+        owner = "cpu0"
+        [[window]]
+        name = "w_cart"
+        bus = "cpu"
+        device = "cart"
+        base = "0x0000"
+        size = "0x8000"
+        [[window]]
+        name = "w_ram"
+        bus = "cpu"
+        device = "ram0"
+        base = "0xC000"
+        size = "0x2000"
+        mirror_stride = "0x2000"
+        mirror_count = 1
+        [[window]]
+        name = "w_psg"
+        bus = "io"
+        device = "psg"
+        base = "0x1007E"
+        size = "0x0002"
+        mirror_stride = "0x0100"
+        mirror_count = 255
+        [[window]]
+        name = "w_vdp"
+        bus = "io"
+        device = "vdp"
+        base = "0x100BE"
+        size = "0x0002"
+        mirror_stride = "0x0100"
+        mirror_count = 255
+        [[window]]
+        name = "w_pad"
+        bus = "io"
+        device = "pad"
+        base = "0x100DC"
+        size = "0x0002"
+        mirror_stride = "0x0100"
+        mirror_count = 255
+        [[window]]
+        name = "w_start"
+        bus = "io"
+        device = "pad"
+        base = "0x10000"
+        size = "0x0001"
+        [[connection]]
+        from = "vdp.irq"
+        to = "cpu0.int"
+        semantics = "irq"
+        [[connection]]
+        from = "pad.nmi"
+        to = "cpu0.nmi"
+        semantics = "irq"
+        {extra}
+        [boot.cpu0]
+        registers = {{ pc = "0x0000" }}
+        [boot.cart]
+        hex = "{hex}"
+        [boot.ram0]
+        pattern = "zero"
+        "#
+        );
+        machine_of(raw)
+    }
+
+    /// Assemble a bundled machine and boot it.
+    fn bundled(triple: &str) -> Machine {
+        let raw = demu_config::bundled::resolve_source(triple).expect("bundled config");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let mut machine = Machine::assemble(config, &assemble::demu_ctors()).expect("assemble");
+        machine.boot();
+        machine
+    }
+
+    /// The Sinclair DI; HALT park image with the idle loop at 0x0066.
+    const ZX_PARK: &str = "f3760000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018fe";
+
+    #[test]
+    fn sg1000_paints_a_tms_tile() {
+        // The program: the registers, the name entry, the pattern of
+        // char 1, the cell color, and the park.
+        let mut image = vec![
+            0x3E, 0x80, 0xD3, 0xBF, // R3 = 0x80: the color table at 0x2000
+            0x3E, 0x03, 0xD3, 0xBF, 0x3E, 0x0E, 0xD3, 0xBF, // R2 = 0x0E: the name at 0x3800
+            0x3E, 0x02, 0xD3, 0xBF, 0x3E, 0x40, 0xD3, 0xBF, // R1 = 0x40: the display on
+            0x3E, 0x01, 0xD3, 0xBF, 0x3E, 0x00, 0xD3, 0xBF, // the VRAM pointer set to 0x3800
+            0x3E, 0xF8, 0xD3, 0xBF, 0x3E, 0x01, 0xD3, 0xBE, // the name entry 0 = char 1
+            0x3E, 0x08, 0xD3, 0xBF, // the VRAM pointer at 0x0008
+            0x3E, 0xC0, 0xD3, 0xBF,
+        ];
+        for v in [0x18u8, 0x3C, 0x7E, 0xFF, 0x7E, 0x3C, 0x18, 0x00] {
+            image.extend_from_slice(&[0x3E, v, 0xD3, 0xBE]);
+        }
+        image.extend_from_slice(&[
+            0x3E, 0x00, 0xD3, 0xBF, // the VRAM pointer at 0x2000 (the color cell 0)
+            0x3E, 0xE0, 0xD3, 0xBF, 0x3E, 0x21, 0xD3, 0xBE, // fg 2, bg 1
+            0x18, 0xFE, // park
+        ]);
+        let mut machine = sega_mini("tms9918.vdp", "sg1000", "", &image);
+        machine.run_until(Tick(684 * 262 * 2));
+        // The pattern row 0 = 0x18: pixels 3 and 4 carry the ink; the
+        // pixel 0 stays on paper.
+        assert_eq!(pixel_of(&machine, "vdp", 3, 0), [33, 200, 66]);
+        assert_eq!(pixel_of(&machine, "vdp", 0, 0), [0, 0, 0]);
+        assert_eq!(frames_of(&machine, "vdp"), 2);
+        // The program parked at the JR byte itself.
+        assert_eq!(cpu_pc_of(&machine), 0x0058, "the program parked");
+    }
+
+    #[test]
+    fn sg1000_frame_irq_reaches_the_core() {
+        // R1 = 0x60: the display on with the frame interrupt enabled;
+        // EI; HALT; the handler at 0x0038 parks.
+        let mut image = vec![
+            0x3E, 0x60, 0xD3, 0xBF, 0x3E, 0x01, 0xD3, 0xBF, 0xFB, 0x76, 0x00, 0x00,
+        ];
+        let mut padded = vec![0u8; 0x40];
+        padded[..image.len()].copy_from_slice(&image);
+        image = padded;
+        image[0x38] = 0x18;
+        image[0x39] = 0xFE;
+        let mut machine = sega_mini("tms9918.vdp", "sg1000", "", &image);
+        machine.run_until(Tick(684 * 262 * 3));
+        // The mode-0 service supplied RST 38h from the open port and
+        // the handler parked.
+        assert_eq!(cpu_pc_of(&machine), 0x0038, "the interrupt handler parked");
+    }
+
+    /// The Master System image: mode 4 with two CRAM entries, the
+    /// name entry, a uniform tile, and the park.
+    fn sms_image() -> Vec<u8> {
+        let p = vec![
+            0x3E, 0x04, 0xD3, 0xBF, // R0 = 0x04: mode 4
+            0x3E, 0x00, 0xD3, 0xBF, 0x3E, 0x42, 0xD3,
+            0xBF, // R1 = 0x42: display on, bit 1 set
+            0x3E, 0x01, 0xD3, 0xBF, 0x3E, 0x0F, 0xD3, 0xBF, // R2 = 0x0F: the name base 0x3C00
+            0x3E, 0x02, 0xD3, 0xBF, 0x3E, 0x04, 0xD3,
+            0xBF, // R4 = 0x04: the tile pool at 0x2000
+            0x3E, 0x04, 0xD3, 0xBF, 0x3E, 0x00, 0xD3, 0xBF, // the pointer at 0x0000: the CRAM
+            0x3E, 0xC0, 0xD3, 0xBF, 0x3E, 0x15, 0xD3,
+            0xBE, // the CRAM 0: the dim gray backdrop
+            0x3E, 0x24, 0xD3, 0xBE, // the CRAM 1: teal
+            0x3E, 0x0F, 0xD3, 0xBF, // the pointer at 0x000F: the CRAM 15
+            0x3E, 0xC0, 0xD3, 0xBF, 0x3E, 0x36, 0xD3, 0xBE, // the CRAM 15: green-yellow
+            0x3E, 0x00, 0xD3, 0xBF, // the name entry 0 = tile 1 (0x3C00)
+            0x3E, 0xFC, 0xD3, 0xBF, 0x3E, 0x01, 0xD3, 0xBE, 0x3E, 0x20, 0xD3,
+            0xBF, // the tile 1 pattern at 0x2020
+            0x3E, 0xE0, 0xD3, 0xBF, 0x0E, 0x20, // C = 32
+            0x3E, 0x88, // A = 0x88: bit 7 set in all four planes
+            0xD3, 0xBE, 0x0D, 0x20, 0xFB, // the fill loop
+            0x18, 0xFE, // park
+        ];
+        p
+    }
+
+    #[test]
+    fn sms_paints_a_mode4_tile() {
+        let mut machine = sega_mini("sms.vdp", "sms", "", &sms_image());
+        machine.run_until(Tick(684 * 262 * 2));
+        // Pixel 0 of the tile sits on CRAM 15; the transparent pixel
+        // 1 shows the CRAM 0 backdrop.
+        assert_eq!(pixel_of(&machine, "vdp", 0, 0), [170, 255, 85]);
+        assert_eq!(pixel_of(&machine, "vdp", 1, 0), [85, 85, 85]);
+    }
+
+    fn gg_image() -> Vec<u8> {
+        // The Game Gear keeps two byte entries: the CRAM 15 sits at
+        // 0x001E and 0x001F.
+        let mut image = sms_image();
+        // Replace the sms one-byte CRAM 15 write with the two-byte
+        // GG entry write: find the six bytes of the pointer set and
+        // the data write, then splice the replacement before the
+        // name-entry block.
+        let needle = [
+            0x3Eu8, 0x0F, 0xD3, 0xBF, 0x3E, 0xC0, 0xD3, 0xBF, 0x3E, 0x36, 0xD3, 0xBE,
+        ];
+        let at = image
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .expect("the CRAM 15 write in the SMS image");
+        let replacement = [
+            0x3Eu8, 0x1E, 0xD3, 0xBF, 0x3E, 0xC0, 0xD3, 0xBF, 0x3E, 0xF5, 0xD3, 0xBE, 0x3E, 0x0A,
+            0xD3, 0xBE,
+        ];
+        image.splice(at..at + needle.len(), replacement);
+        image
+    }
+
+    #[test]
+    fn gg_publishes_the_160_by_144_window() {
+        // The GG image plus the name fill: the window shows the
+        // raster rows 24-167 and the columns 48-207, so the walk maps
+        // them to the name rows 3-20 and the columns 6-25 of the
+        // 32-wide table, the entries 96 through 671. The fill loop
+        // stores tile 1 in every entry of that band, and the pattern
+        // loop sets every plane bit of tile 1, so the walk gives the
+        // color index 15 on every window column.
+        let mut image = gg_image();
+        let at = image.len() - 2; // before the park
+        let extra = [
+            0x3E, 0x60, 0xD3, 0xBF, // the pointer low byte 0x60
+            0x3E, 0xFC, 0xD3, 0xBF, // the write code raises the pointer to 0x3C60
+            0x01, 0x40, 0x02, // LD BC, 576, the 18 rows of 32 entries
+            0x3E, 0x01, 0xD3, 0xBE, // LD A, 1 stores tile 1 through the data port
+            0x0B, 0x78, 0xB1, // DEC BC, LD A,B, OR C
+            0x20, 0xF7, // JR NZ, the store byte
+            0x3E, 0x20, 0xD3, 0xBF, // the pointer low byte 0x20
+            0x3E, 0xE0, 0xD3, 0xBF, // the write code raises the pointer to 0x2020
+            0x01, 0x20, 0x00, // LD BC, 32, the 32 pattern bytes of the tile
+            0x3E, 0xFF, 0xD3, 0xBE, // LD A, 0xFF sets every plane bit
+            0x0B, 0x78, 0xB1, // DEC BC, LD A,B, OR C
+            0x20, 0xF7, // JR NZ, the store byte
+        ];
+        image.splice(at..at, extra);
+        let mut machine = sega_mini("gg.vdp", "gg", "", &image);
+        machine.run_until(Tick(684 * 262 * 2));
+        let f = machine
+            .device_by_name("vdp")
+            .and_then(|d| d.video())
+            .and_then(|v| v.frame())
+            .expect("frame")
+            .clone();
+        assert_eq!((f.width, f.height), (160, 144), "the Game Gear window");
+        assert_eq!(pixel_of(&machine, "vdp", 0, 0), [170, 255, 85]);
+        assert_eq!(pixel_of(&machine, "vdp", 159, 143), [170, 255, 85]);
+    }
+
+    #[test]
+    fn sms_pause_pulls_the_nmi_handler() {
+        let mut padded = vec![0u8; 0x68];
+        padded[0] = 0xF3;
+        padded[1] = 0x76;
+        padded[0x66] = 0x18; // JR -2: the idle loop
+        padded[0x67] = 0xFE;
+        let mut machine = sega_mini("sms.vdp", "sms", "", &padded);
+        machine.boot();
+        // The pulse latches at the machine's current tick, so the
+        // press lands before the run starts.
+        inject_event(&mut machine, "pad", "press pause");
+        machine.run_until(Tick(4000));
+        inject_event(&mut machine, "pad", "release pause");
+        assert_eq!(cpu_pc_of(&machine), 0x0066, "the NMI handler ran");
+    }
+
+    #[test]
+    fn gg_start_reads_through_port_zero() {
+        let mut machine = sega_mini("gg.vdp", "gg", "", &[0xF3u8, 0x76]);
+        machine.boot();
+        machine.run_until(Tick(1000));
+        inject_event(&mut machine, "pad", "press start");
+        assert_eq!(
+            machine.peek("io", demu_core::Address(0x10000)),
+            0x00,
+            "START low"
+        );
+        inject_event(&mut machine, "pad", "release start");
+        assert_eq!(
+            machine.peek("io", demu_core::Address(0x10000)),
+            0x80,
+            "START idle"
+        );
+    }
+
+    #[test]
+    fn sn76489_streams_samples_after_a_tone_setup() {
+        // Tone A at full volume: register 1 (the latch 0x82) takes
+        // attenuation 0, and register 0 (0x81) takes the period data.
+        let image = [
+            0x3Eu8, 0x82, 0xD3, 0x7E, 0x3E, 0x00, 0xD3, 0x7E, 0x3E, 0x80, 0xD3, 0x7E, 0x3E, 0x01,
+            0xD3, 0x7E, 0x18, 0xFE,
+        ];
+        let mut padded = vec![0u8; 0x40];
+        padded[..image.len()].copy_from_slice(&image);
+        let mut machine = sega_mini("sms.vdp", "sms", "", &padded);
+        machine.run_until(Tick(40000));
+        let drained = machine
+            .device_by_name_mut("psg")
+            .and_then(|d| {
+                d.as_any_mut()
+                    .downcast_mut::<demu_dev_audio::Sn76489>()
+                    .map(|psg| psg.take_samples().len())
+            })
+            .unwrap_or(0);
+        assert!(
+            drained > 0,
+            "the PSG streamed samples while the core parked"
+        );
+    }
+
+    /// The Sinclair mini machine with the named form, the T-states
+    /// per scanline, the ROM size, and the boot image replacing the
+    /// ROM.
+    fn sinclair_mini(form: &str, line_t: u32, rom_size: u32, image_hex: &str) -> Machine {
+        let quirks = if form == "zx81" {
+            "\n[quirks]
+\"zx.zx81_slow\" = true
+"
+        } else {
+            ""
+        };
+        let raw = format!(
+            r#"
+        [system]
+        name = "zx-mini"
+        triple = "z80-sinclair-zx81"
+        [clock.main]
+        frequency = "3250000"
+        [[device]]
+        name = "cpu0"
+        kind = "z80.cpu"
+        domain = "main"
+        [device.dividers]
+        cpu = 1
+        [device.params]
+        bus = "cpu"
+        io_bus = "io"
+        [[device]]
+        name = "u0"
+        kind = "zx.ula"
+        domain = "main"
+        [device.params]
+        form = "{form}"
+        line_t = {line_t}
+        frame_lines = 310
+        [[device]]
+        name = "rom0"
+        kind = "z80.rom"
+        domain = "main"
+        [device.params]
+        size = {rom_size}
+        [[device]]
+        name = "ram0"
+        kind = "z80.ram"
+        domain = "main"
+        [device.params]
+        size = 4096
+        [[bus]]
+        name = "cpu"
+        address_bits = 16
+        owner = "cpu0"
+        [[bus]]
+        name = "io"
+        address_bits = 17
+        owner = "cpu0"
+        [[window]]
+        name = "w_ula"
+        bus = "io"
+        device = "u0"
+        base = "0x10000"
+        size = "0x10000"
+        [[window]]
+        name = "w_rom"
+        bus = "cpu"
+        device = "rom0"
+        base = "0x0000"
+        size = "{rom_size_hex:04X}"
+        [[window]]
+        name = "w_ram"
+        bus = "cpu"
+        device = "ram0"
+        base = "0x4000"
+        size = "0x1000"
+        [[connection]]
+        from = "u0.int"
+        to = "cpu0.int"
+        semantics = "irq"
+        [[connection]]
+        from = "u0.nmi"
+        to = "cpu0.nmi"
+        semantics = "irq"
+        [[connection]]
+        from = "cpu0.halt"
+        to = "u0.halt"
+        semantics = "display-sync"
+        {quirks}
+        [boot.cpu0]
+        registers = {{ pc = "0x0000" }}
+        [boot.rom0]
+        hex = "{image_hex}"
+        [boot.ram0]
+        pattern = "zero"
+        "#,
+            rom_size_hex = rom_size,
+        );
+        machine_of(raw)
+    }
+
+    #[test]
+    fn zx80_renders_the_dfile_and_parks() {
+        let mut machine = sinclair_mini("zx80", 208, 4096, ZX_PARK);
+        machine.boot();
+        machine.run_until(Tick(310 * 208 * 2));
+        // The frame publishes with the paper display; the idle loop
+        // at 0x0066 parks the core at its JR address.
+        assert_eq!(cpu_pc_of(&machine), 0x0066, "the idle loop parks the core");
+        assert_eq!(
+            pixel_of(&machine, "u0", 32, 24),
+            [0, 0, 0],
+            "a blank DFILE paints paper"
+        );
+    }
+
+    #[test]
+    fn zx81_block_graphics_paint_through_the_dfile() {
+        let mut machine = sinclair_mini("zx81", 208, 8192, ZX_PARK);
+        machine.boot();
+        machine.run_until(Tick(2000));
+        // The block char of bit 1 paints its top-right quarters of
+        // the first char cell per the module's published mapping.
+        assert!(machine.debug_write("cpu", demu_core::Address(0x4000), 0x42));
+        machine.run_until(Tick(310 * 208));
+        assert_eq!(pixel_of(&machine, "u0", 32 + 2, 24), [255, 255, 255]);
+        assert_eq!(
+            pixel_of(&machine, "u0", 32, 24),
+            [0, 0, 0],
+            "paper where the bit is clear"
+        );
+    }
+
+    #[test]
+    fn spectrum_border_changes_through_port_fe() {
+        // A program in RAM: the border red through port FE, then the
+        // park; the boot pc points at the RAM.
+        let image = vec![0x3Eu8, 0x04, 0xD3, 0xFE, 0x18, 0xFE];
+        let mut ram_hex = String::new();
+        for b in &image {
+            ram_hex.push_str(&format!("{b:02x}"));
+        }
+        // The 48 KiB RAM hex dump: 0x1000 zeros then the program at
+        // 0x5000 = the RAM offset 0x1000; the boot pc = 0x5000.
+        let pad = "0".repeat(0x1000 * 2);
+        let ram_hex_padded = format!("{pad}{}", hex_of(&image));
+        let raw = format!(
+            r#"
+        [system]
+        name = "zx-spectrum-mini"
+        triple = "z80-sinclair-spectrum"
+        [clock.main]
+        frequency = "3500000"
+        [[device]]
+        name = "cpu0"
+        kind = "z80.cpu"
+        domain = "main"
+        [device.dividers]
+        cpu = 1
+        [device.params]
+        bus = "cpu"
+        io_bus = "io"
+        contended = "0x4000-0x8000,0xE000-0x10000"
+        io_contend = "0x40-0x80"
+        contend_from = 14336
+        contend_to = 57344
+        contend_base = 14344
+        [[device]]
+        name = "u0"
+        kind = "zx.ula"
+        domain = "main"
+        [device.params]
+        form = "spectrum"
+        line_t = 224
+        frame_lines = 312
+        [[device]]
+        name = "rom0"
+        kind = "z80.rom"
+        domain = "main"
+        [device.params]
+        size = 16384
+        [[device]]
+        name = "ram_a"
+        kind = "z80.ram"
+        domain = "main"
+        [device.params]
+        size = 16384
+        [[device]]
+        name = "ram_b"
+        kind = "z80.ram"
+        domain = "main"
+        [device.params]
+        size = 16384
+        [[device]]
+        name = "ram_c"
+        kind = "z80.ram"
+        domain = "main"
+        [device.params]
+        size = 16384
+        [[bus]]
+        name = "cpu"
+        address_bits = 16
+        owner = "cpu0"
+        [[bus]]
+        name = "io"
+        address_bits = 17
+        owner = "cpu0"
+        [[window]]
+        name = "w_ula"
+        bus = "io"
+        device = "u0"
+        base = "0x10000"
+        size = "0x10000"
+        [[window]]
+        name = "w_rom"
+        bus = "cpu"
+        device = "rom0"
+        base = "0x0000"
+        size = "0x4000"
+        [[window]]
+        name = "w_ram_a"
+        bus = "cpu"
+        device = "ram_a"
+        base = "0x4000"
+        size = "0x4000"
+        [[window]]
+        name = "w_ram_b"
+        bus = "cpu"
+        device = "ram_b"
+        base = "0x8000"
+        size = "0x4000"
+        [[window]]
+        name = "w_ram_c"
+        bus = "cpu"
+        device = "ram_c"
+        base = "0xC000"
+        size = "0x4000"
+        [[connection]]
+        from = "u0.int"
+        to = "cpu0.int"
+        semantics = "irq"
+        [[connection]]
+        from = "cpu0.halt"
+        to = "u0.halt"
+        semantics = "display-sync"
+        [boot.cpu0]
+        registers = {{ pc = "0xD000" }}
+        [boot.rom0]
+        hex = "{ZX_PARK}"
+        [boot.ram_a]
+        pattern = "zero"
+        [boot.ram_b]
+        pattern = "zero"
+        [boot.ram_c]
+        hex = "{ram_hex_padded}"
+        "#,
+            ram_hex_padded = ram_hex_padded
+        );
+        let mut machine = machine_of(raw);
+        machine.boot();
+        machine.run_until(Tick(69888 + 1000));
+        assert_eq!(
+            pixel_of(&machine, "u0", 5, 5),
+            [205, 0, 0],
+            "the border paints red"
+        );
+    }
+
+    #[test]
+    fn spectrum_contended_run_lags_the_uncontended_run() {
+        // The same JR -2 idle runs from the screen RAM (contended)
+        // and from the upper RAM (uncontended).
+        let mut contended = spectrum48_of("zx-contention-a", 0x4000, 0x00, "18fe");
+        let mut clean = spectrum48_of("zx-contention-b", 0x9000, 0x00, "18fe");
+        let f_c = frame_fetches(&mut contended, 0x4000);
+        let f_u = frame_fetches(&mut clean, 0x9000);
+        assert!(
+            f_c < f_u,
+            "the contended loop ran fewer fetches: {f_c} vs {f_u}"
+        );
+        // The lag clears the ten percent mark within one frame.
+        let lag = 100 * (f_u - f_c) / f_u;
+        assert!(lag > 10, "the lag under ten percent: {f_c} vs {f_u}");
+    }
+
+    #[test]
+    fn spectrum_contended_port_run_lags_the_uncontended_port_run() {
+        // Both idle loops sit in the contended screen RAM, so the
+        // memory fetch delays cancel between the twins; the two ULA
+        // port writes per iteration carry the difference. The port
+        // writes are OUT (0xFE),A: the accumulator rides the port high
+        // byte, and the port low byte 0xFE contends while 0x00 does
+        // not.
+        let mut contended = spectrum48_of("zx-io-contention-a", 0x4000, 0xFE, "d3fed3fe18fa");
+        let mut clean = spectrum48_of("zx-io-contention-b", 0x4000, 0x00, "d300d30018fa");
+        let f_c = frame_fetches(&mut contended, 0x4000);
+        let f_u = frame_fetches(&mut clean, 0x4000);
+        assert!(
+            f_c < f_u,
+            "the contended port loop ran fewer fetches: {f_c} vs {f_u}"
+        );
+        // The lag clears the ten percent mark within one frame.
+        let lag = 100 * (f_u - f_c) / f_u;
+        assert!(lag > 10, "the lag under ten percent: {f_c} vs {f_u}");
+    }
+
+    /// The TI-85 mini machine: the mem die, the LCD, and the link.
+    fn ti85_mini(image: &[u8]) -> Machine {
+        let hex = hex_of(image);
+        let raw = format!(
+            r#"
+        [system]
+        name = "ti85-mini"
+        triple = "z80-ti-85"
+        [clock.main]
+        frequency = "6000000"
+        [[device]]
+        name = "cpu0"
+        kind = "z80.cpu"
+        domain = "main"
+        [device.dividers]
+        cpu = 1
+        [device.params]
+        bus = "cpu"
+        io_bus = "io"
+        [[device]]
+        name = "mem0"
+        kind = "ti85.mem"
+        domain = "main"
+        [[device]]
+        name = "lcd0"
+        kind = "ti85.lcd"
+        domain = "main"
+        [[device]]
+        name = "link0"
+        kind = "ti85.link"
+        domain = "main"
+        [[bus]]
+        name = "cpu"
+        address_bits = 16
+        owner = "cpu0"
+        [[bus]]
+        name = "io"
+        address_bits = 17
+        owner = "cpu0"
+        [[window]]
+        name = "w_mem_low"
+        bus = "cpu"
+        device = "mem0"
+        base = "0x0000"
+        size = "0x4000"
+        [[window]]
+        name = "w_mem_mid"
+        bus = "cpu"
+        device = "mem0"
+        base = "0x4000"
+        size = "0x4000"
+        [[window]]
+        name = "w_mem_high"
+        bus = "cpu"
+        device = "mem0"
+        base = "0x8000"
+        size = "0x4000"
+        [[window]]
+        name = "w_mem_top"
+        bus = "cpu"
+        device = "mem0"
+        base = "0xC000"
+        size = "0x4000"
+        [[window]]
+        name = "w_display"
+        bus = "cpu"
+        device = "lcd0"
+        base = "0xFC00"
+        size = "0x0400"
+        overlay = "lcd"
+        overlay_read_priority = 1
+        overlay_write_priority = 1
+        [[window]]
+        name = "w_driver"
+        bus = "cpu"
+        device = "lcd0"
+        base = "0xFEC0"
+        size = "0x0040"
+        overlay = "lcd"
+        overlay_read_priority = 2
+        overlay_write_priority = 2
+        [[window]]
+        name = "w_link"
+        bus = "io"
+        device = "link0"
+        base = "0x10005"
+        size = "0x0001"
+        [[window]]
+        name = "w_memports"
+        bus = "io"
+        device = "mem0"
+        base = "0x10006"
+        size = "0x0003"
+        [boot.cpu0]
+        registers = {{ pc = "0x0000" }}
+        [boot.mem0]
+        hex = "{hex}"
+        "#
+        );
+        machine_of(raw)
+    }
+
+    #[test]
+    fn ti85_lcd_publishes_the_buffer_bits() {
+        let mut machine = ti85_mini(&[0xF3u8, 0x76]);
+        machine.boot();
+        machine.run_until(Tick(1000));
+        assert!(machine.debug_write("cpu", demu_core::Address(0xFC00), 0xF0));
+        machine.run_until(Tick(10));
+        // Bit 7 is the leftmost pixel: the columns 0-3 light.
+        assert_eq!(pixel_of(&machine, "lcd0", 0, 0), [24, 84, 24]);
+        assert_eq!(pixel_of(&machine, "lcd0", 4, 0), [232, 240, 232]);
+    }
+
+    #[test]
+    fn ti85_mem_routes_the_banked_pages() {
+        let mut machine = ti85_mini(&[0xF3u8, 0x76]);
+        machine.boot();
+        assert!(machine.debug_write("cpu", demu_core::Address(0x8000), 0xAA));
+        assert_eq!(machine.peek("cpu", demu_core::Address(0x8000)), 0xAA);
+        // The controller pages bank 1 there already; port 6 to bank 0
+        // moves that page out.
+        assert!(machine.debug_write("io", demu_core::Address(0x10006), 0x00));
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0x8000)),
+            0x00,
+            "a banked page moved out"
+        );
+        assert!(machine.debug_write("io", demu_core::Address(0x10006), 0x01));
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0x8000)),
+            0xAA,
+            "the page moved back in"
+        );
+        // The ROM page switch through port 8.
+        assert!(machine.debug_write("io", demu_core::Address(0x10008), 0x02));
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0x0000)),
+            0x00,
+            "page 2 is empty"
+        );
+    }
+
+    #[test]
+    fn ti85_link_levels_round_trip() {
+        let mut machine = ti85_mini(&[0xF3u8, 0x76]);
+        machine.boot();
+        // Both lines output-enabled high: the read reports the drive
+        // levels in bits 0-1.
+        assert!(machine.debug_write("io", demu_core::Address(0x10005), 0x0F));
+        assert_eq!(
+            machine.peek("io", demu_core::Address(0x10005)),
+            0x03,
+            "the enabled drives read back"
+        );
+        // Both lines released: the remote levels ride in.
+        assert!(machine.debug_write("io", demu_core::Address(0x10005), 0x00));
+        inject_event(&mut machine, "link0", "link 0 1");
+        assert_eq!(
+            machine.peek("io", demu_core::Address(0x10005)),
+            0x02,
+            "the remote white low, red high"
+        );
+    }
+
+    #[test]
+    fn the_bundled_z80_configs_boot_and_park() {
+        // The park addresses: the ZX80/ZX81 forms take their frame
+        // non-maskable edges into the idle loop at 0x0066 and park
+        // inside it; the rest park on the HALT at 0x0002.
+        let parks = [
+            ("z80-sega-sg1000", 0x0002),
+            ("z80-sega-mastersystem", 0x0002),
+            ("z80-sega-gamegear", 0x0002),
+            ("z80-sinclair-zx80", 0x0066),
+            ("z80-sinclair-zx81", 0x0066),
+            ("z80-sinclair-spectrum", 0x0002),
+            ("z80-sinclair-spectrum128", 0x0002),
+            ("z80-ti-85", 0x0002),
+        ];
+        for (triple, park) in parks {
+            let mut machine = bundled(triple);
+            machine.run_until(Tick(400000));
+            assert_eq!(cpu_pc_of(&machine), park, "{triple} parks");
+        }
+    }
+
+    #[test]
+    fn the_bundled_spectrums_show_the_frame_cadence() {
+        // One 48K frame = 69,888 T-states; one 128K frame = 70,908.
+        // The run includes the boundary at its own end tick: the frame
+        // publishes land at t = 0 and at every frame length after.
+        let mut s48 = bundled("z80-sinclair-spectrum");
+        s48.run_until(Tick(69888 * 3));
+        assert_eq!(frames_of(&s48, "u0"), 4);
+        let mut s128 = bundled("z80-sinclair-spectrum128");
+        s128.run_until(Tick(70908 * 3));
+        assert_eq!(frames_of(&s128, "u0"), 4);
+    }
+
+    #[test]
+    fn the_sinclair_pages_move_through_the_port_plane() {
+        // The bundled 128K machine's controller takes the paging port
+        // write over the port plane at $17FFD and moves banks.
+        let raw = demu_config::bundled::resolve_source("z80-sinclair-spectrum128")
+            .expect("variant config");
+        let (config, _) = demu_config::validate(&raw).expect("validate");
+        let mut machine = Machine::assemble(config, &assemble::demu_ctors()).expect("assemble");
+        machine.boot();
+        machine.run_until(Tick(1000));
+        // Bank 1 pages in over the door.
+        assert!(machine.debug_write("io", demu_core::Address(0x17FFD), 0x01));
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0xC000)),
+            0x00,
+            "bank 1 idle"
+        );
+        assert!(machine.debug_write("cpu", demu_core::Address(0xC000), 0x42));
+        assert_eq!(machine.peek("cpu", demu_core::Address(0xC000)), 0x42);
+        // Bank 5 pages in; the door serves its own copy.
+        assert!(machine.debug_write("io", demu_core::Address(0x17FFD), 0x05));
+        assert_eq!(
+            machine.peek("cpu", demu_core::Address(0xC000)),
+            0x00,
+            "bank 5 idle"
+        );
+        // The paging port answers $FF (write-only).
+        assert_eq!(machine.peek("io", demu_core::Address(0x17FFD)), 0xFF);
+    }
+
+    #[test]
+    fn spectrum_save_restore_continues_identically() {
+        let mut machine = bundled("z80-sinclair-spectrum");
+        machine.run_until(Tick(200000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        let mut twin_a = bundled("z80-sinclair-spectrum");
+        twin_a.load(&buf).expect("load a");
+        let mut twin_b = bundled("z80-sinclair-spectrum");
+        twin_b.load(&buf).expect("load b");
+        twin_a.run_until(Tick(69888 * 2));
+        twin_b.run_until(Tick(69888 * 2));
+        let mut again = Vec::new();
+        twin_a.save(&mut again).expect("save");
+        let mut check = Vec::new();
+        twin_b.save(&mut check).expect("save");
+        assert_eq!(again, check, "the two restores continue identically");
+    }
+
+    #[test]
+    fn zz81_save_restore_continues_identically() {
+        let mut machine = bundled("z80-sinclair-zx81");
+        machine.run_until(Tick(200000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        // Both twins take the same save and run the same tail; the
+        // byte comparison needs the same ticks on both sides.
+        let mut twin_a = bundled("z80-sinclair-zx81");
+        twin_a.load(&buf).expect("load a");
+        let mut twin_b = bundled("z80-sinclair-zx81");
+        twin_b.load(&buf).expect("load b");
+        twin_a.run_until(Tick(310 * 208));
+        twin_b.run_until(Tick(310 * 208));
+        let mut again = Vec::new();
+        twin_a.save(&mut again).expect("save");
+        let mut check = Vec::new();
+        twin_b.save(&mut check).expect("save");
+        assert_eq!(again, check, "the restored ZX81 continues identically");
+    }
+
+    #[test]
+    fn sms_save_restore_continues_identically() {
+        let mut machine = bundled("z80-sega-mastersystem");
+        machine.run_until(Tick(200000));
+        let mut buf = Vec::new();
+        machine.save(&mut buf).expect("save");
+        let mut twin_a = bundled("z80-sega-mastersystem");
+        twin_a.load(&buf).expect("load a");
+        let mut twin_b = bundled("z80-sega-mastersystem");
+        twin_b.load(&buf).expect("load b");
+        twin_a.run_until(Tick(69888));
+        twin_b.run_until(Tick(69888));
+        let mut again = Vec::new();
+        twin_a.save(&mut again).expect("save");
+        let mut check = Vec::new();
+        twin_b.save(&mut check).expect("save");
+        assert_eq!(again, check, "the two restores continue identically");
+    }
+}

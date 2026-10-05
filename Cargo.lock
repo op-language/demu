@@ -40,6 +40,7 @@ dependencies = [
  "demu-cpu-mos65sc02",
  "demu-cpu-sm83",
  "demu-cpu-wdc65c816",
+ "demu-cpu-z80",
  "demu-dev-audio",
  "demu-dev-cartridge",
  "demu-dev-dma",
@@ -120,6 +121,10 @@ dependencies = [
 [[package]]
 name = "demu-cpu-z80"
 version = "0.1.0"
+dependencies = [
+ "demu-config",
+ "demu-core",
+]
 
 [[package]]
 name = "demu-dev-audio"

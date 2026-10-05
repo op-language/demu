@@ -1,0 +1,141 @@
+# Sega Game Gear, the canonical system configuration.
+#
+# The Game Gear runs the same NTSC crystal domain as the Master
+# System with the same CPU, VDP, PSG, and cartridge kinds. The
+# published differences are: the display publishes the 160x144 view of
+# rows 24 to 167 and columns 48 to 207; the START button reads through
+# the cartridge I/O port $00 bit 7; and the machine keeps no PAUSE
+# non-maskable line. The `sega.gg_start` quirk flag documents the
+# START-through-port-$00 form. The cartridge hex boot plants the
+# DI; HALT park.
+
+[system]
+name = "Sega Game Gear"
+triple = "z80-sega-gamegear"
+description = "The Sega Game Gear with the mode-4 VDP, the PSG, the joypad ports with the START button on port $00, and the cartridge storage."
+
+[clock.main]
+frequency = "10738635"
+origin = "the NTSC 3579545 color burst at three times; the CPU sits at /3 and the VDP dot at /2"
+
+[[device]]
+name = "cpu0"
+kind = "z80.cpu"
+domain = "main"
+[device.dividers]
+cpu = 3
+[device.params]
+bus = "cpu"
+io_bus = "io"
+
+[[device]]
+name = "vdp"
+kind = "gg.vdp"
+domain = "main"
+[device.dividers]
+dot = 2
+
+[[device]]
+name = "psg"
+kind = "sn76489.psg"
+domain = "main"
+[device.dividers]
+psg = 48
+
+[[device]]
+name = "pad"
+kind = "sega.io"
+domain = "main"
+[device.params]
+form = "gg"
+
+[[device]]
+name = "ram0"
+kind = "z80.ram"
+domain = "main"
+[device.params]
+size = 8192
+
+[[device]]
+name = "cart"
+kind = "sega.cart"
+domain = "main"
+[device.params]
+form = "sega"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[bus]]
+name = "io"
+address_bits = 17
+owner = "cpu0"
+
+[[window]]
+name = "w_cart"
+bus = "cpu"
+device = "cart"
+base = "0x0000"
+size = "0x8000"
+
+[[window]]
+name = "w_ram"
+bus = "cpu"
+device = "ram0"
+base = "0xC000"
+size = "0x2000"
+mirror_stride = "0x2000"
+mirror_count = 1
+
+[[window]]
+name = "w_start"
+bus = "io"
+device = "pad"
+base = "0x10000"
+size = "0x0001"
+
+[[window]]
+name = "w_psg"
+bus = "io"
+device = "psg"
+base = "0x1007E"
+size = "0x0002"
+mirror_stride = "0x0100"
+mirror_count = 255
+
+[[window]]
+name = "w_vdp"
+bus = "io"
+device = "vdp"
+base = "0x100BE"
+size = "0x0002"
+mirror_stride = "0x0100"
+mirror_count = 255
+
+[[window]]
+name = "w_pad"
+bus = "io"
+device = "pad"
+base = "0x100DC"
+size = "0x0004"
+mirror_stride = "0x0100"
+mirror_count = 255
+
+[[connection]]
+from = "vdp.irq"
+to = "cpu0.int"
+semantics = "irq"
+
+[quirks]
+"sega.gg_start" = true
+
+[boot.cpu0]
+registers = { pc = "0x0000" }
+
+[boot.cart]
+hex = "f376"
+
+[boot.ram0]
+pattern = "zero"

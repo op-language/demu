@@ -17,6 +17,7 @@ pub mod nes;
 pub mod pce;
 pub mod pokey;
 pub mod sid;
+pub mod sn76489;
 
 pub use dsp::Sdsp;
 pub use iigsdoc::IigsDoc;
@@ -24,6 +25,7 @@ pub use nes::NesApu;
 pub use pce::PcePsg;
 pub use pokey::Pokey;
 pub use sid::Sid;
+pub use sn76489::Sn76489;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};

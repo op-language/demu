@@ -3,7 +3,9 @@
 //! the Apple II keyboard and switch block, the Disk II drive, the
 //! CIA and PIA support chips, the SNES controller port, the Lynx
 //! Mikey die's timers, LCD line engine, joypad, cart page select
-//! line, and serial surface, and the PC Engine turbo-tap pad.
+//! line, and serial surface, the PC Engine turbo-tap pad, the Sega
+//! 8-bit joypad ports and console keys, the Sinclair ULA of the ZX80,
+//! ZX81, and ZX Spectrum, and the TI-85 memory controller.
 //!
 //! The SM83 timer runs on a free-running system counter that
 //! increments once per T-cycle. The timer register `DIV` is the
@@ -25,7 +27,10 @@ pub mod nes;
 pub mod pce;
 pub mod pia;
 pub mod riot;
+pub mod sega;
 pub mod snespad;
+pub mod ti85;
+pub mod zxula;
 
 pub use apple::AppleIo;
 pub use cia::Cia;
@@ -37,7 +42,10 @@ pub use nes::Controller;
 pub use pce::PceTurbotap;
 pub use pia::Pia;
 pub use riot::Riot;
+pub use sega::SegaIo;
 pub use snespad::SnesPad;
+pub use ti85::Ti85Mem;
+pub use zxula::ZxUla;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};

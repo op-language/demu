@@ -293,6 +293,54 @@ pub fn core_registry() -> &'static KindRegistry {
         ));
         r.register(KindInfo::new("pce.ram", DomainRequirement::Required, &[]));
         r.register(KindInfo::new("pce.cart", DomainRequirement::Required, &[]));
+        // The Z80 machine family: the NMOS core, the plain memory
+        // pieces, the banked ROM of the banked Sinclair models, the
+        // VDP family of the Sega systems, the SG76489-class PSG, the
+        // Sega I/O controller, the Sinclair ULA, and the TI-85
+        // memory, display, and link pieces.
+        r.register(KindInfo::new(
+            "z80.cpu",
+            DomainRequirement::Required,
+            &["undocumented"],
+        ));
+        r.register(KindInfo::new("z80.ram", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("z80.rom", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new(
+            "z80.bankrom",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "zx.bankram",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "tms9918.vdp",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new("sms.vdp", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("gg.vdp", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new(
+            "sn76489.psg",
+            DomainRequirement::Required,
+            &[],
+        ));
+        r.register(KindInfo::new(
+            "sega.io",
+            DomainRequirement::Required,
+            &["gg_start"],
+        ));
+        r.register(KindInfo::new("sega.cart", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new(
+            "zx.ula",
+            DomainRequirement::Required,
+            &["zx81_slow"],
+        ));
+        r.register(KindInfo::new("ti85.mem", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("ti85.lcd", DomainRequirement::Required, &[]));
+        r.register(KindInfo::new("ti85.link", DomainRequirement::Required, &[]));
         r
     })
 }
@@ -314,7 +362,10 @@ mod tests {
     fn registry_rejects_unknown() {
         let r = core_registry();
         assert!(r.get(&KindName::new("sm83.ppu").unwrap()).is_some());
-        assert!(r.get(&KindName::new("z80.cpu").unwrap()).is_none());
+        // The Z80 family registered with the debug probe group.
+        let z80 = r.get(&KindName::new("z80.cpu").unwrap()).unwrap();
+        assert_eq!(z80.quirks, &["undocumented"]);
+        assert!(r.get(&KindName::new("nonexistent.kind").unwrap()).is_none());
     }
 
     #[test]

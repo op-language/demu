@@ -1,7 +1,8 @@
 //! The cartridge devices: the header parsing, ROM banking, and MBC1,
 //! MBC2, MBC3, and MBC5 memory bank controllers of the SM83; the Atari
 //! 2600, 5200, and 7800 loaders; the Lynx loader with the published
-//! LNX header and its page banking; and the PC Engine HuCard loader.
+//! LNX header and its page banking; the PC Engine HuCard loader; and
+//! the Sega 8-bit loader with its flat, Sega, and Codemasters forms.
 //!
 //! The SM83 boot read parses the `0x100-0x14F` header, sizes the
 //! cartridge RAM from the header, and selects the mapper: the `mbc`
@@ -14,12 +15,14 @@ pub mod atari;
 pub mod lynx;
 pub mod nes;
 pub mod pce;
+pub mod sega;
 pub mod snes;
 
 pub use atari::{Atari2600Cart, Atari5200Cart, Atari7800Cart};
 pub use lynx::LynxCart;
 pub use nes::{NesCart, NesHeader, NesMapper};
 pub use pce::PceCart;
+pub use sega::SegaCart;
 pub use snes::SnesCart;
 
 use demu_config::model::BootState;

@@ -944,3 +944,199 @@ timer, and the register-protocol surfaces.
   with the actual 512-byte boot ROM remain pending the follow-up
   evidence pass with real ROM assets, per the precedent every
   machine family before this one set.
+
+## 24. As-built notes: Z80 machines
+
+The Sega and Sinclair systems and the TI-85 of the Z80 family
+implement this design. The notes record the deviations and the
+details the design leaves open, in the order of the machine parts.
+
+### The core (`z80.cpu`)
+
+- `z80.cpu` runs the full documented instruction set with the
+  published per-access timing: one opcode fetch costs 4 T-states, one
+  memory access 3, one port access 4 with its automatic wait state,
+  and the index forms pay their internal address add as the published
+  totals require. The `cpu` divider entry carries the domain ticks
+  per T-state (3 on the Sega crystal domain, 1 where the domain is
+  the CPU clock).
+- Interrupt machinery: modes 0, 1, and 2; an NMI service costs 11
+  T-states with the stack decrement inside the acknowledge cycle;
+  mode 1 accepts in 13 and mode 2 in 19 with the vector low byte read
+  from the port plane at 0x10000. An EI defers maskable acceptance by
+  one boundary. Mode 0 runs the accepted data byte with the program
+  counter at the interrupted address, so a supplied RST pushes and
+  jumps once.
+- The undocumented forms sit behind the `undocumented` quirk flag:
+  the index-register halves (IXH, IXL, IYH, IYL), the SLL shift, the
+  `OUT (C),0` store, the `IN (C)` flag-only form, and the index
+  register IN/OUT forms. With the flag clear the forms run
+  effect-free: the `IN (C)` and `OUT (C),0` pair falls to the
+  unknown-form 8 T-state fallback with no bus access, and the index
+  halves read zero, while the SLL shift and the index IN/OUT forms
+  keep their access totals.
+  The flag bits 3 and 5 copy the result, operand, or address bits
+  where the NMOS core copies them; those copies are not gated by the
+  quirk.
+- A repeated block instruction refetches its opcode pair once per
+  iteration, so the refresh counter gains two per iteration and the
+  iteration totals match the published 21 T-states with 16 for the
+  last one. Block operations run to their end without sampling
+  interrupts, since the core samples only at instruction boundaries.
+- The bit tests of a memory byte take their flag copy bits from the
+  effective-address high byte, the registered behavior of the NMOS
+  core.
+
+### Sinclair memory contention
+
+- The delay follows the published ULA pattern 6, 5, 4, 3, 2, 1, 0, 0
+  indexed by the frame T-state modulo 8. The access path carries four
+  range slots per side; a config with more entries contends only the
+  first four (a recorded cap for the bundled machines, which declare
+  two or fewer). The 48K window runs over
+  frame T-states 14336 to 57344 with the phase base 14344; the 128K
+  window runs 14361 to 58140 with the base 14361. The parameters
+  `contended`, `io_contend`, `contend_from`, `contend_to`, and
+  `contend_base` live on the CPU device entry.
+- I/O contention keys on the high port byte $40-$7F range and on port
+  $FE itself. The frame anchor is the tick of the `int` line rising
+  edge, so contention stays phase-locked to the frame start.
+- The banked-page contention of the 128K rides the `contend_page`
+  line from `zx.bankram` (high when the paged bank is 1, 3, 5, or 7);
+  the CPU keeps the $4000-$7FFF static range.
+
+### Port plane
+
+- A Z80 machine declares two buses: the memory bus and the port bus.
+  The CPU presents every port access at the plane address
+  `$10000 | port`, so port windows live in `$10000-$1FFFF` and never
+  collide with the memory spans of a device that answers both spaces.
+  The `IN A,(n)` and `OUT (n),A` forms place the accumulator on the
+  port high byte, per the published Z80.
+- The Sega port decode is low-byte only, so the Sega port windows
+  carry a mirror stride of 0x100 over the full plane. The TI-85
+  decodes ports by their exact 16-bit value; the ZX ULA answers every
+  even port through one plane-wide window.
+
+### The Sega systems
+
+- One VDP struct carries the three forms by kind: `tms9918.vdp` (the
+  TMS9918A modes over a 16 KiB VRAM), `sms.vdp` (the SMS1 class), and
+  `gg.vdp` (the SMS2-class Game Gear). The TMS modes render Graphics
+  I, Graphics II, Text 40, and Multicolor; invalid mode-bit
+  combinations fall through to Graphics I. The mode 4 render runs on
+  the SMS and Game Gear forms (the R0 bit 2 with the R1 bit 1) with
+  the 32x28 name table, the per-line horizontal scroll, the scroll
+  locks, the 64 sprites with the 8-per-line limit, the D0 row
+  terminator, collision, and the 224/240-line height modes behind the
+  `extended_height` parameter (SMS only).
+- The mode-4 data-port read publishes the V counter with the
+  published 218/213 fold; the H counter read is not implemented. The
+  Vblank trigger emits once per frame boundary; the frame and line
+  interrupt flags ride the R1 bit 5 and R0 bit 4 enables with the R10
+  counter, and the IRQ line re-drives per visit on a level change.
+- The SMS CRAM holds one byte per entry (red in bits 1-0, blue in
+  bits 3-2, green in bits 5-4) with the upper half mirrored; the Game
+  Gear CRAM holds two bytes per entry (blue and green in the first,
+  red in the second) and publishes the 160x144 window of raster rows
+  24 to 167 and columns 48 to 207. The published Game Gear centered
+  border is not composed; the window is the whole surface (a recorded
+  approximation).
+- The mode-4 pattern generator honors the R4 base; the SMS1
+  name-table mask bit applies the simplified full-base form.
+- SN76489: three tone channels with 10-bit periods (a period of zero
+  or one holds a constant level, the published sample-playback form),
+  a 4-bit attenuation each, and a noise channel with the 16-bit
+  linear feedback shift register, white taps {0, 3}, the periodic
+  single tap, control writes resetting the register to $8000, and the
+  shift-rate table 16, 32, 64, or the tone C period. The mixed output
+  uses a linear 16-step attenuation; the chip's per-step 2.5 dB
+  ladder is not modeled.
+- The I/O controller (`sega.io`) answers the $DC-$DD pad ports with
+  the active-low directions and fire lines under the TH swap rule. On
+  the sms form a `pause` press latches one staged NMI pulse (_high
+  one visit, low the next); on the game gear form the START key reads
+  through port $00 bit 7 and the `sega.gg_start` quirk registers the
+  staged behavior.
+- Cartridges (`sega.cart`) load the flat SG-1000 form, the flat SMS
+  form, the Sega 16 KiB-page mapper ($3FFE/$3FFF/$402C/$402D), and
+  the Codemasters mapper (the $0000 write banks the $8000 window at
+  value + 1), all wrapping by page count.
+
+### The Sinclair systems
+
+- The ULA (`zx.ula`) carries the three machine forms. The $FE port
+  write stores border bits 1-3, the beeper drive (bit 4 on the
+  Spectrum, bit 0 on the ZX80/ZX81), and the microphone bit 0; the
+  read returns the keyboard half-row selected by the port high byte
+  with pressed keys as cleared bits and the EAR bit 6 low. The frame
+  rhythm: the Spectrum raises `int` for one scanline at line 0 and
+  publishes the 320x240 frame (256x192 with the 32/24 border); the
+  ZX80 raises one `nmi` per frame; the ZX81 raises `int` on the
+  display lines and `nmi` on the blank lines under the
+  `zx.zx81_slow` quirk.
+- The ZX80/ZX81 display renders each display line from the display
+  file and the character ROM through `peek`, one row per scheduled
+  line, rather than from the recorded bus traffic of the running
+  core; this is a recorded approximation. The ZX81 slow mode repaints
+  each DFILE row at four display-line visits, idempotent against the
+  16 display lines per row that its 96-line window provides. The
+  ZX81 block graphics mapping is recorded in the ULA module docs.
+- The plain memory kinds `z80.rom` and `z80.ram` wrap StaticRam; each
+  window base must be a multiple of its device size, since a device
+  maps addresses by modulo. The 48K config splits the RAM into three
+  16 KiB devices at $4000, $8000, and $C000. `z80.bankrom` holds the
+  two-page ROM switched by the `select` line; `zx.bankram` holds the
+  128 KiB of RAM with the fixed banks 5 and 2, the paged door over
+  $C000-$FFFF, and the $7FFD paging port (write-only, reads $FF,
+  lockable).
+- The Spectrum 128K variant (`z80-sinclair-spectrum128`) extends the
+  48K config: the PAL crystal 3546895, the 228-T-state 311-line
+  frame, the banked map, and the new line set; the bundled selector
+  name resolves it as a machine variant of the `z80-sinclair-spectrum`
+  triple.
+
+### The TI-85
+
+- `ti85.mem` holds the 128 KiB ROM in eight 16 KiB pages and the
+  32 KiB RAM in two banks. The page map: $0000-$3FFF follows the ROM
+  page latch on port $08, $4000-$7FFF holds ROM page 0, $8000-$BFFF
+  follows the RAM bank latch on port $06 (reset 1), and $C000-$FFFF
+  follows the port $07 latch (reset 0). The device answers the latch
+  values at the memory addresses $0006-$0008 as well, since a device
+  sees no bus identity in an access, so a real ROM image whose first
+  bytes sit there is unservable; a bundled machine avoids the span
+  through its park image. This alias is a recorded limitation for the
+  real-ROM evidence pass.
+- `ti85.lcd` holds the 128x64 one-bit display buffer at $FC00-$FFFF
+  (bit 7 the leftmost pixel of each byte) with the driver page inside
+  at $FEC0-$FEFF (the record of the published driver layout pending
+  the real-ROM evidence pass). The driver decodes three addresses:
+  $FEC0 latches a command (01 fills the buffer with the next data
+  byte, 02 accepted as no operation, 08 and 0C turn the display off
+  and on), $FEC2 latches the keypad column in bits 2-0, and the
+  keypad read reports pressed keys as cleared bits with bit 7 idle
+  high. The frame publishes from the buffer on every touched write.
+- `ti85.link` answers port $05: the write carries the drive levels in
+  bits 0-1 and the output enables in bits 2-3; the read reports the
+  enabled lines as the local drive and the floating lines as the
+  remote levels, with the remote levels injected with the event form
+  `link <white> <red>`.
+- The machine boots the DI; HALT park at 0x0000 and carries no
+  interrupt sources in this build.
+
+### Pending evidence
+- The interrupt acknowledge of modes 0 and 2 reads the vector byte
+  at the port plane address $10000; on machines whose port decode
+  answers that address (the Game Gear START port, the Spectrum ULA
+  keyboard row) the acknowledge byte comes from that device. Bundled
+  machines use mode 1, so the collision is observational until the
+  interrupt-model evidence pass.
+
+
+Per the precedent every machine family before this one set, the
+following remain pending a follow-up evidence pass with real ROM
+assets: the ZEXALL and ZEXDOC instruction suites, the per-VDP and
+per-system test-ROM screens, the Sinclair real-BIOS contention
+check, the ZX80/ZX81 real-BIOS boot screens, and the TI-85 real-ROM
+boot.

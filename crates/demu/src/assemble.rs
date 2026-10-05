@@ -5,7 +5,8 @@
 //! NES and the Apple II machines of the 6502 family, the 2600, 5200,
 //! 800, and 7800 forms of the Atari and Commodore families, the SNES
 //! and Apple IIgs of the 65C816 family, the Lynx of the 65SC02
-//! family, and the PC Engine of the HuC6280 family. The configuration
+//! family, the PC Engine of the HuC6280 family, and the Sega,
+//! Sinclair, and TI-85 machines of the Z80 family. The configuration
 //! selects kinds by name; this registry supplies the compiled
 //! constructors.
 
@@ -20,26 +21,38 @@ use demu_cpu_sm83::CpuDevice as Sm83CpuDevice;
 use demu_cpu_sm83::Sm83;
 use demu_cpu_wdc65c816::CpuDevice as WdcCpuDevice;
 use demu_cpu_wdc65c816::Wdc65c816;
+use demu_cpu_z80::CpuDevice as Z80CpuDevice;
+use demu_cpu_z80::Z80;
 use demu_dev_audio::Apu;
 use demu_dev_audio::IigsDoc;
 use demu_dev_audio::NesApu;
 use demu_dev_audio::PcePsg;
+use demu_dev_audio::Sn76489;
 use demu_dev_audio::apu::Apu as SnesApu;
 use demu_dev_cartridge::Cart;
 use demu_dev_cartridge::LynxCart;
 use demu_dev_cartridge::NesCart;
 use demu_dev_cartridge::PceCart;
+use demu_dev_cartridge::SegaCart;
 use demu_dev_cartridge::SnesCart;
 use demu_dev_dma::{Hdma, OamDma, SnesSys};
 use demu_dev_io::Iwm;
 use demu_dev_io::LynxMikey;
 use demu_dev_io::PceTurbotap;
+use demu_dev_io::SegaIo;
+use demu_dev_io::Ti85Mem;
+use demu_dev_io::ZxUla;
 use demu_dev_io::{Io, Joypad, Mega2, SnesPad};
+use demu_dev_memory::StaticRam;
 use demu_dev_memory::{Bootrom, Hram, Wram};
 use demu_dev_memory::{LynxBootrom, LynxMapCtl};
+use demu_dev_memory::{Z80BankRom, ZxBankRam};
+use demu_dev_serial::Ti85Link;
 use demu_dev_video::NesPpu;
 use demu_dev_video::Ppu;
 use demu_dev_video::SnesPpu;
+use demu_dev_video::Ti85Lcd;
+use demu_dev_video::Vdp;
 use demu_dev_video::lynx::LynxSuzy;
 use demu_dev_video::pce::{PceVce, PceVdc};
 
@@ -55,12 +68,16 @@ pub const ATARI_CART_KINDS: &[&str] = &["atari.cart2600", "atari.cart5200", "ata
 /// The SNES family cartridge kinds.
 pub const SNES_CART_KINDS: &[&str] = &["snes.cart"];
 
+/// The Z80 family cartridge kinds.
+pub const SEGA_CART_KINDS: &[&str] = &["sega.cart"];
+
 /// True for a device kind that carries the cartridge image.
 pub fn is_cart_kind(kind: &str) -> bool {
     kind == CART_KIND
         || NES_CART_KINDS.contains(&kind)
         || ATARI_CART_KINDS.contains(&kind)
         || SNES_CART_KINDS.contains(&kind)
+        || SEGA_CART_KINDS.contains(&kind)
 }
 
 /// The NES cartridge and pixel-processing-unit coupling: the mirror
@@ -169,6 +186,21 @@ pub fn demu_ctors() -> DeviceCtors {
     ctors.register("pce.joypad", Box::new(new_pce_joypad));
     ctors.register("pce.ram", Box::new(new_pce_ram));
     ctors.register("pce.cart", Box::new(new_pce_cart));
+    ctors.register("z80.cpu", Box::new(new_z80_cpu));
+    ctors.register("z80.rom", Box::new(new_z80_rom));
+    ctors.register("z80.ram", Box::new(new_z80_ram));
+    ctors.register("z80.bankrom", Box::new(new_z80_bankrom));
+    ctors.register("tms9918.vdp", Box::new(new_tms_vdp));
+    ctors.register("sms.vdp", Box::new(new_sms_vdp));
+    ctors.register("gg.vdp", Box::new(new_gg_vdp));
+    ctors.register("sn76489.psg", Box::new(new_sn76489));
+    ctors.register("sega.io", Box::new(new_sega_io));
+    ctors.register("sega.cart", Box::new(new_sega_cart));
+    ctors.register("zx.ula", Box::new(new_zx_ula));
+    ctors.register("zx.bankram", Box::new(new_zx_bankram));
+    ctors.register("ti85.mem", Box::new(new_ti85_mem));
+    ctors.register("ti85.lcd", Box::new(new_ti85_lcd));
+    ctors.register("ti85.link", Box::new(new_ti85_link));
     ctors
 }
 
@@ -635,4 +667,116 @@ fn new_pce_cart(
     _config: &demu_config::model::SystemConfig,
 ) -> Result<Box<dyn Device>, MachineError> {
     Ok(Box::new(PceCart::new(device)))
+}
+
+fn new_z80_cpu(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Z80CpuDevice::Z80(Z80::new(device, config))))
+}
+
+fn new_z80_rom(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let mut rom = StaticRam::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    rom.set_readonly(true);
+    Ok(Box::new(rom))
+}
+
+fn new_z80_ram(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let mut ram = StaticRam::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    ram.set_readonly(false);
+    Ok(Box::new(ram))
+}
+
+fn new_z80_bankrom(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let rom = Z80BankRom::new(device).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(rom))
+}
+
+fn new_tms_vdp(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Vdp::new(device, config)))
+}
+
+fn new_sms_vdp(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Vdp::new(device, config)))
+}
+
+fn new_gg_vdp(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Vdp::new(device, config)))
+}
+
+fn new_sn76489(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Sn76489::new(device)))
+}
+
+fn new_sega_io(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let io = SegaIo::new(device, config).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(io))
+}
+
+fn new_sega_cart(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(SegaCart::new(device)))
+}
+
+fn new_zx_ula(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    let ula = ZxUla::new(device, config).map_err(|e| MachineError::Assembly(e.to_string()))?;
+    Ok(Box::new(ula))
+}
+
+fn new_zx_bankram(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(ZxBankRam::new(device)))
+}
+
+fn new_ti85_mem(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Ti85Mem::new(device)))
+}
+
+fn new_ti85_lcd(
+    device: &DeviceInstance,
+    config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Ti85Lcd::new(device, config)))
+}
+
+fn new_ti85_link(
+    device: &DeviceInstance,
+    _config: &demu_config::model::SystemConfig,
+) -> Result<Box<dyn Device>, MachineError> {
+    Ok(Box::new(Ti85Link::new(device)))
 }

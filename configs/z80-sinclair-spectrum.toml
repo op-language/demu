@@ -1,0 +1,156 @@
+# Sinclair ZX Spectrum 48K, the canonical system configuration.
+#
+# The Spectrum runs one exact 3.5 MHz domain, and the scanline is 224
+# T-states with a 312-scanline frame, so one frame is 69,888 T-states
+# and the frame interrupt opens at the line 0 boundary. The ULA
+# answers every even port: the write carries the border color in bits
+# 1 to 3, the beeper drive in bit 4, and the microphone line in bit 0;
+# the read returns the keyboard half-row that the port's high byte
+# selects. The ULA renders the 256x192 display with its 32-pixel side
+# and 24-pixel top and bottom borders and drives the frame interrupt.
+#
+# The contended memory is the published set: the screen bank at
+# $4000-$7FFF and the bank at $E000-$FFFF. The contention window runs
+# from the frame T-state 14336 to 57344, with the delay-table phase
+# at 14344: an access at window offset 0 waits 6 T-states and the
+# last two offsets of each period wait none. The I/O contention keys
+# on the high port byte $40-$7F and on the ULA port $FE itself.
+# The hex boot plants DI; HALT at the reset address with the idle
+# loop at 0x0066, so a stray non-maskable edge parks in the idle
+# loop.
+
+[system]
+name = "Sinclair ZX Spectrum"
+triple = "z80-sinclair-spectrum"
+description = "The Sinclair ZX Spectrum 48K with the ULA, the 16 KiB ROM space, and the 48 KiB contended work RAM."
+
+[clock.main]
+frequency = "3500000"
+origin = "the exact 3.5 MHz ULA-divided clock; one scanline is 224 T-states and one frame 69,888"
+
+[[device]]
+name = "cpu0"
+kind = "z80.cpu"
+domain = "main"
+[device.dividers]
+cpu = 1
+[device.params]
+bus = "cpu"
+io_bus = "io"
+contended = "0x4000-0x8000,0xE000-0x10000"
+io_contend = "0x40-0x80"
+contend_from = 14336
+contend_to = 57344
+contend_base = 14344
+
+[[device]]
+name = "u0"
+kind = "zx.ula"
+domain = "main"
+[device.params]
+form = "spectrum"
+line_t = 224
+frame_lines = 312
+
+[[device]]
+name = "rom0"
+kind = "z80.rom"
+domain = "main"
+[device.params]
+size = 16384
+
+# The 48 KiB map: three 16 KiB banks, each a device whose address
+# divides its window base exactly.
+[[device]]
+name = "ram_a"
+kind = "z80.ram"
+domain = "main"
+[device.params]
+size = 16384
+
+[[device]]
+name = "ram_b"
+kind = "z80.ram"
+domain = "main"
+[device.params]
+size = 16384
+
+[[device]]
+name = "ram_c"
+kind = "z80.ram"
+domain = "main"
+[device.params]
+size = 16384
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[bus]]
+name = "io"
+address_bits = 17
+owner = "cpu0"
+
+[[window]]
+name = "w_ula"
+bus = "io"
+device = "u0"
+base = "0x10000"
+size = "0x10000"
+overlay = "paging"
+overlay_read_priority = 1
+overlay_write_priority = 1
+
+[[window]]
+name = "w_rom"
+bus = "cpu"
+device = "rom0"
+base = "0x0000"
+size = "0x4000"
+
+[[window]]
+name = "w_ram_a"
+bus = "cpu"
+device = "ram_a"
+base = "0x4000"
+size = "0x4000"
+
+[[window]]
+name = "w_ram_b"
+bus = "cpu"
+device = "ram_b"
+base = "0x8000"
+size = "0x4000"
+
+[[window]]
+name = "w_ram_c"
+bus = "cpu"
+device = "ram_c"
+base = "0xC000"
+size = "0x4000"
+
+[[connection]]
+from = "u0.int"
+to = "cpu0.int"
+semantics = "irq"
+
+[[connection]]
+from = "cpu0.halt"
+to = "u0.halt"
+semantics = "display-sync"
+
+[boot.cpu0]
+registers = { pc = "0x0000" }
+
+[boot.rom0]
+hex = """f3760000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018fe"""
+
+[boot.ram_a]
+pattern = "zero"
+
+[boot.ram_b]
+pattern = "zero"
+
+[boot.ram_c]
+pattern = "zero"

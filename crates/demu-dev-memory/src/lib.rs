@@ -1,11 +1,17 @@
 //! The memory devices: the SM83 work RAM, high RAM, and boot ROM, the
 //! flat RAM and mask ROM of the Atari machine families, and the SNES
-//! work RAM. The Lynx adds its boot ROM and map-control register.
+//! work RAM. The Lynx adds its boot ROM and map-control register. The
+//! ZX Spectrum 128 adds its banked RAM controller and two-page banked
+//! ROM.
 
+pub mod bank_ram;
+pub mod bank_rom;
 pub mod lynx;
 pub mod sneswram;
 mod static_ram;
 
+pub use bank_ram::ZxBankRam;
+pub use bank_rom::Z80BankRom;
 pub use lynx::{LynxBootrom, LynxMapCtl};
 pub use sneswram::SnesWram;
 pub use static_ram::StaticRam;

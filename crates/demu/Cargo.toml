@@ -20,6 +20,7 @@ demu-cpu-mos6502 = { version = "0.1.0", path = "../demu-cpu-mos6502" }
 demu-cpu-mos65sc02 = { version = "0.1.0", path = "../demu-cpu-mos65sc02" }
 demu-cpu-huc6280 = { version = "0.1.0", path = "../demu-cpu-huc6280" }
 demu-cpu-wdc65c816 = { version = "0.1.0", path = "../demu-cpu-wdc65c816" }
+demu-cpu-z80 = { version = "0.1.0", path = "../demu-cpu-z80" }
 demu-dev-memory = { version = "0.1.0", path = "../demu-dev-memory" }
 demu-dev-cartridge = { version = "0.1.0", path = "../demu-dev-cartridge" }
 demu-dev-video = { version = "0.1.0", path = "../demu-dev-video" }

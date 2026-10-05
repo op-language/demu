@@ -1,3 +1,5 @@
+//! The serial devices: the SM83 serial port and the TI-85 link port.
+//!
 //! The SM83 serial device.
 //!
 //! The shift register moves one byte over eight bits. With the internal
@@ -5,6 +7,14 @@
 //! CGB fast clock), and the completion raises the serial interrupt.
 //! With the external clock selected and no link peer, the transfer never
 //! starts, which matches an idle link cable.
+//!
+//! The TI-85 link port carries the two cable lines of the machine's
+//! link protocol: the latched drive levels and enables, and the remote
+//! levels that arrive as injected link events.
+
+pub mod ti85;
+
+pub use ti85::Ti85Link;
 
 use demu_config::model::BootState;
 use demu_core::device::{AccessWidth, BusAccess, MachineCtx};

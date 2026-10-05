@@ -3,6 +3,7 @@
 //! Each test loads a TOML document and checks one behavior of the
 //! resolution or of a validation layer, through the public entry points.
 
+use demu_config::bundled::resolve_source;
 use demu_config::{
     ConfigError, DeviceName, Frequency, RawConfig, SystemConfig, parse, smoke_config, validate,
 };
@@ -385,5 +386,95 @@ fn resolved_graph_is_consistent() {
     for window in &config.windows {
         assert!(config.buses.iter().any(|b| b.name == window.bus));
         assert!(config.devices_by_name.contains_key(&window.device));
+    }
+}
+
+#[test]
+fn the_z80_triples_accept_their_kinds() {
+    // The z80 family kinds validate against the z80 triples.
+    for (triple, kind) in [
+        ("z80-sega-sg1000", "z80.cpu"),
+        ("z80-sega-mastersystem", "z80.cpu"),
+        ("z80-sega-gamegear", "z80.cpu"),
+        ("z80-sinclair-zx80", "z80.cpu"),
+        ("z80-sinclair-zx81", "z80.cpu"),
+        ("z80-sinclair-spectrum", "z80.cpu"),
+        ("z80-ti-85", "z80.cpu"),
+    ] {
+        let mut raw = base_config();
+        raw.system.as_mut().unwrap().triple = triple.into();
+        raw.device[0].kind = kind.to_string();
+        let (config, _) = validate(&raw).expect("the z80 kinds pass on their triples");
+        assert_eq!(config.devices[0].kind.as_str(), kind);
+    }
+    // A z80 CPU kind stays wrong on a non-z80 triple.
+    let mut raw = base_config();
+    raw.system.as_mut().unwrap().triple = "sm83-nintendo-gameboy".into();
+    raw.device[0].kind = "z80.cpu".to_string();
+    assert!(validate(&raw).is_err());
+}
+
+#[test]
+fn the_spectrum128_variant_extends_the_48k_machine() {
+    // The variant resolves through the bundled selector and merges
+    // the banked memory controller over the 48K base.
+    let raw = resolve_source("z80-sinclair-spectrum128").expect("variant resolves");
+    let (config, warnings) = validate(&raw).expect("the variant validates");
+    assert!(warnings.is_empty(), "the variant raises no lints");
+    assert_eq!(
+        config.clocks["main"].frequency.to_string(),
+        "3546895",
+        "the PAL crystal replaced the 48K clock"
+    );
+    let ula = config
+        .devices
+        .iter()
+        .find(|d| d.kind.as_str() == "zx.ula")
+        .expect("the ULA survives the extend");
+    assert_eq!(
+        ula.params.get("line_t").and_then(|v| v.as_integer()),
+        Some(228),
+        "the 128K scanline length replaced the 48K form"
+    );
+    let door = config
+        .devices
+        .iter()
+        .find(|d| d.kind.as_str() == "zx.bankram")
+        .expect("the memory controller joined");
+    assert_eq!(
+        door.name.as_str(),
+        "ram_a",
+        "the controller replaced the plain RAM"
+    );
+    // The CPU contention window follows the published 128K
+    // delay-table phase.
+    let cpu = config
+        .devices
+        .iter()
+        .find(|d| d.kind.as_str() == "z80.cpu")
+        .expect("the cpu");
+    assert_eq!(
+        cpu.params.get("contend_base").and_then(|v| v.as_integer()),
+        Some(14361),
+        "the 128K contention base replaced the 48K base"
+    );
+}
+
+#[test]
+fn the_bundled_z80_configs_validate() {
+    for triple in [
+        "z80-sega-sg1000",
+        "z80-sega-mastersystem",
+        "z80-sega-gamegear",
+        "z80-sinclair-zx80",
+        "z80-sinclair-zx81",
+        "z80-sinclair-spectrum",
+        "z80-sinclair-spectrum128",
+        "z80-ti-85",
+    ] {
+        let raw = resolve_source(triple).unwrap_or_else(|_| panic!("{triple} resolves"));
+        let (config, warnings) = validate(&raw).unwrap_or_else(|_| panic!("{triple} validates"));
+        let _ = config;
+        assert!(warnings.is_empty(), "{triple} raises lints: {warnings:?}");
     }
 }

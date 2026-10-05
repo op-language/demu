@@ -1,0 +1,136 @@
+# Sega Master System, the canonical system configuration.
+#
+# The Master System keeps the SG-1000 clock domain: the NTSC crystal
+# as a three-times domain with the CPU at /3 and the VDP dot at /2, so
+# one scanline is 342 dots = 684 domain ticks = 228 CPU T-states. The
+# VDP answers ports $BE-$BF; the PSG answer sits on $7E-$7F through
+# the same VDP data/control decode; the pads answer $DC-$DF. The PAUSE
+# button pulls the non-maskable interrupt through the pad.nmi line.
+# The 8 KiB work RAM maps at $C000-$DFFF with the one mirror over
+# $E000-$FFFF. The cartridge hex boot plants the DI; HALT park.
+
+[system]
+name = "Sega Master System"
+triple = "z80-sega-mastersystem"
+description = "The Sega Master System with the mode-4 VDP, the PSG, the joypad ports with the PAUSE non-maskable line, and the cartridge storage."
+
+[clock.main]
+frequency = "10738635"
+origin = "three times the NTSC 3579545 color burst; the CPU sits at /3 and the VDP dot at /2"
+
+[[device]]
+name = "cpu0"
+kind = "z80.cpu"
+domain = "main"
+[device.dividers]
+cpu = 3
+[device.params]
+bus = "cpu"
+io_bus = "io"
+
+[[device]]
+name = "vdp"
+kind = "sms.vdp"
+domain = "main"
+[device.dividers]
+dot = 2
+
+[[device]]
+name = "psg"
+kind = "sn76489.psg"
+domain = "main"
+[device.dividers]
+psg = 48
+
+[[device]]
+name = "pad"
+kind = "sega.io"
+domain = "main"
+[device.params]
+form = "sms"
+
+[[device]]
+name = "ram0"
+kind = "z80.ram"
+domain = "main"
+[device.params]
+size = 8192
+
+[[device]]
+name = "cart"
+kind = "sega.cart"
+domain = "main"
+[device.params]
+form = "sms"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[bus]]
+name = "io"
+address_bits = 17
+owner = "cpu0"
+
+[[window]]
+name = "w_cart"
+bus = "cpu"
+device = "cart"
+base = "0x0000"
+size = "0x8000"
+
+[[window]]
+name = "w_ram"
+bus = "cpu"
+device = "ram0"
+base = "0xC000"
+size = "0x2000"
+mirror_stride = "0x2000"
+mirror_count = 1
+
+[[window]]
+name = "w_psg"
+bus = "io"
+device = "psg"
+base = "0x1007E"
+size = "0x0002"
+mirror_stride = "0x0100"
+mirror_count = 255
+
+[[window]]
+name = "w_vdp"
+bus = "io"
+device = "vdp"
+base = "0x100BE"
+size = "0x0002"
+mirror_stride = "0x0100"
+mirror_count = 255
+
+[[window]]
+name = "w_pad"
+bus = "io"
+device = "pad"
+base = "0x100DC"
+size = "0x0004"
+mirror_stride = "0x0100"
+mirror_count = 255
+
+[[connection]]
+from = "vdp.irq"
+to = "cpu0.int"
+semantics = "irq"
+
+[[connection]]
+from = "pad.nmi"
+to = "cpu0.nmi"
+semantics = "irq"
+
+[boot.cpu0]
+registers = { pc = "0x0000" }
+
+[boot.cart]
+hex = "f376"
+
+[boot.ram0]
+pattern = "zero"

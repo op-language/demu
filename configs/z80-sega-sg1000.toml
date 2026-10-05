@@ -1,0 +1,137 @@
+# Sega SG-1000, the canonical system configuration.
+#
+# The SG-1000 runs one clock domain: the NTSC color-burst crystal of
+# 3579545 Hz, kept as a three-times domain so that the VDP dot (a dot
+# every 2/3 of a T-state) and the PSG sample step (the clock at /16)
+# both divide the crystal exactly. The CPU sits at /3, the VDP dot at
+# /2, and the PSG at /48.
+#
+# The TMS9918A VDP answers ports $BE-$BF and drives the frame
+# interrupt through the vdp.irq line. The SN76489 PSG answers the
+# ports $40-$7F (bit 6 set). The I/O controller answers the joypad
+# ports $DC-$DD and holds no cartridge lines. The 1 KiB work RAM maps
+# over $C000-$FFFF with the published stride. The cartridge hex boot
+# plants a DI; HALT park at the reset address, so the bundled machine
+# boots into a parked core and the positional ROM argument replaces
+# the image.
+
+[system]
+name = "Sega SG-1000"
+triple = "z80-sega-sg1000"
+description = "The Sega SG-1000 with the TMS9918A VDP, the SN76489 PSG, the joypad ports, and the cartridge storage."
+
+[clock.main]
+frequency = "10738635"
+origin = "three times the NTSC 3579545 color burst; the CPU sits at /3, the VDP dot at /2, and the PSG sample step at /48"
+
+[[device]]
+name = "cpu0"
+kind = "z80.cpu"
+domain = "main"
+[device.dividers]
+cpu = 3
+[device.params]
+bus = "cpu"
+io_bus = "io"
+
+[[device]]
+name = "vdp"
+kind = "tms9918.vdp"
+domain = "main"
+[device.dividers]
+dot = 2
+
+[[device]]
+name = "psg"
+kind = "sn76489.psg"
+domain = "main"
+[device.dividers]
+psg = 48
+
+[[device]]
+name = "pad"
+kind = "sega.io"
+domain = "main"
+[device.params]
+form = "sg1000"
+
+[[device]]
+name = "ram0"
+kind = "z80.ram"
+domain = "main"
+[device.params]
+size = 1024
+
+[[device]]
+name = "cart"
+kind = "sega.cart"
+domain = "main"
+[device.params]
+form = "sg1000"
+
+[[bus]]
+name = "cpu"
+address_bits = 16
+owner = "cpu0"
+
+[[bus]]
+name = "io"
+address_bits = 17
+owner = "cpu0"
+
+[[window]]
+name = "w_cart"
+bus = "cpu"
+device = "cart"
+base = "0x0000"
+size = "0x8000"
+
+[[window]]
+name = "w_ram"
+bus = "cpu"
+device = "ram0"
+base = "0xC000"
+size = "0x0400"
+mirror_stride = "0x0400"
+mirror_count = 15
+
+[[window]]
+name = "w_psg"
+bus = "io"
+device = "psg"
+base = "0x10040"
+size = "0x0040"
+mirror_stride = "0x0100"
+mirror_count = 255
+
+[[window]]
+name = "w_vdp"
+bus = "io"
+device = "vdp"
+base = "0x100BE"
+size = "0x0002"
+mirror_stride = "0x0100"
+mirror_count = 255
+
+[[window]]
+name = "w_pad"
+bus = "io"
+device = "pad"
+base = "0x100DC"
+size = "0x0002"
+mirror_stride = "0x0100"
+mirror_count = 255
+
+[[connection]]
+from = "vdp.irq"
+to = "cpu0.int"
+semantics = "irq"
+
+[boot.cpu0]
+registers = { pc = "0x0000" }
+
+[boot.cart]
+hex = "f376"
+
+[boot.ram0]
+pattern = "zero"
