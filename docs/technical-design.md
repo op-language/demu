@@ -1501,3 +1501,50 @@ error.
   `frames` counter and the Vblank event carry one entry per emulated
   display frame, which the one-frame-per-video-block contract
   requires.
+
+## 27. As-built notes: cart integration
+
+The cart side ships in the `cart` repository (version 0.9.0). cart's
+`[[run.profile]]` with `emulator = "demu"` gets `["--config", <triplet>]`
+from `emulator_model_args` for every target triplet, so `cart run`
+launches `demu --config <triplet> ... <rom>`. `cart test` names demu in
+its test profile and runs the native demu mode: the opc invocation
+passes `--output-stages`, and cart forwards `--dump`, `--sentinel
+<addr>:<value>`, `--symbols <test>.linked.opl`, and optionally
+`--checks <file>` from the manifest's `[test.demu] checks` field. demu
+boots and parks, so the pipe carries one `run-frame <N>` command into
+demu's stdin, with `<N>` from the optional `[test.demu] frames` field
+and 120 as the default when the section or the field is absent; the
+closed pipe ends the session, demu's exit code decides pass and fail
+(0 pass, 1 sentinel miss, 2 error). Other
+emulators keep the spawn-and-read sentinel contract.
+
+`cart debug` builds the ROM with the stage output, starts `demu --config
+<triplet> --symbols <rom>.linked.opl --serve
+target/<triplet>/debug.demu-sock <rom>`, prints the socket path, and
+waits while demu serves one client at a time.
+
+The demu symbol reader keeps the string `org` field of hand-written
+tables and now also accepts the JSON number form that the compiler's
+object-file envelope emits; the number lands in the text field in
+decimal form and `parse_number` resolves it. The `.linked.opl` file of
+an opc build therefore loads without conversion.
+
+demu does not join the default emulator matrix of cart; a project opts
+in per profile.
+
+The `--sentinel` dump in demu carries exactly 65536 bytes of the
+primary bus image, one byte per address, so the `cart test` dump
+contract of a flat binary applies. Sentinel addresses at or above
+0x10000 silently compare as 0; keep addresses at or below 0xFFFF.
+demu's `--checks` schema and flag remain a follow-up item (section 13);
+cart already forwards the flag when the manifest section names a
+checks file, and the current demu build rejects the flag with exit 2.
+
+### Known first-build gaps in the cart launch surface
+
+- The demu ROM-positional override rejects the Lynx and PC Engine
+  configurations: the `is_cart_kind` list of the binary does not name
+  the `lynx.cart` and `pce.cart` kinds yet, so `cart debug` with those
+  triples reports `the configuration declares no cartridge device`. The
+  fix lives on the demu side with the follow-up evidence pass.

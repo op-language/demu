@@ -20,7 +20,11 @@ pub struct Section {
     #[serde(default)]
     pub name: String,
     /// The origin address, decimal or `0x` hex.
-    #[serde(default)]
+    ///
+    /// The compiler dumps `org` as a JSON number; earlier hand-written
+    /// tables used hex strings. The deserializer accepts both and keeps
+    /// the text form, which `parse_number` resolves later.
+    #[serde(default, deserialize_with = "deserialize_number_or_string")]
     pub org: String,
     /// The bank number.
     #[serde(default)]
@@ -76,6 +80,41 @@ pub enum SymbolsError {
         /// The version the reader accepts.
         expected: u32,
     },
+}
+
+/// Deserialize an address text that carries either a JSON string or a
+/// JSON number.
+///
+/// The compiler's object-file envelope encodes `org` as a number.
+/// Hand-written and round-tripped tables may carry a decimal or `0x`
+/// hex string. Both forms land in the text field unchanged.
+fn deserialize_number_or_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct NumberOrString;
+
+    impl serde::de::Visitor<'_> for NumberOrString {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an origin address string or number")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<String, E> {
+            Ok(text.to_string())
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<String, E> {
+            Ok(value.to_string())
+        }
+
+        fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<String, E> {
+            Ok(value.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(NumberOrString)
 }
 
 impl SymbolTable {
@@ -260,6 +299,49 @@ mod tests {
         }"#;
         let table = SymbolTable::parse(text).expect("unknown fields are ignored");
         assert_eq!(table.sections[0].name, "s");
+    }
+
+    #[test]
+    fn numeric_org_from_the_compiler_is_accepted() {
+        // The compiler dumps `org` as a JSON number; the reader keeps
+        // the text form and resolves it through `parse_number`.
+        let text = r#"{
+            "version": 1,
+            "target": "rp2A03-nintendo-nes-ntsc",
+            "sections": [
+                {
+                    "name": "rom_bank0",
+                    "kind": "rom",
+                    "org": 49152,
+                    "bank": 0,
+                    "maxsize": 16384,
+                    "symbols": [
+                        {"name": "main", "offset": 0, "size": 6, "kind": "function", "is_pub": false}
+                    ],
+                    "relocations": [],
+                    "data": []
+                }
+            ]
+        }"#;
+        let table = SymbolTable::parse(text).expect("the compiler envelope parses");
+        let lookup = SymbolLookup::new(&table);
+        let main = lookup.by_name("main").expect("main resolves");
+        assert_eq!(main.address, 0xC000);
+    }
+
+    #[test]
+    fn decimal_string_org_is_accepted() {
+        let text = r#"{
+            "version": 1,
+            "target": "x",
+            "sections": [{"name": "s", "org": "336", "bank": 0, "symbols": [
+                {"name": "start", "offset": 0, "size": 4, "kind": "function"}
+            ]}]
+        }"#;
+        let table = SymbolTable::parse(text).expect("decimal org parses");
+        let lookup = SymbolLookup::new(&table);
+        let start = lookup.by_name("start").expect("start resolves");
+        assert_eq!(start.address, 336);
     }
 
     #[test]
