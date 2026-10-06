@@ -198,8 +198,13 @@ The trigger registry accepts these kinds:
 - vblank
 - scanline reached
 
-Each trigger carries an optional condition expression. When the condition
-is absent, the trigger fires on every event.
+Each trigger carries an optional condition expression. When the
+condition is absent, the trigger fires on every event.
+
+As built: the condition form is reachable through the library API
+only; the command surface constructs breakpoints and write
+watchpoints. The `Cycle` and `ClockEdge` kinds have no runtime event
+path in this build; the other kinds route through the run loop.
 
 ### 6.2 Expression grammar
 
@@ -242,22 +247,30 @@ All three modes run the same command set. One protocol, two transports.
 
 ### 7.2 REPL commands
 
+The as-built command set of this build:
+
 | Family | Commands |
 |---|---|
-| Session | `load`, `config`, `info [device]`, `reset`, `power` |
-| Run | `step [N]`, `run [N]`, `run-frame [N]`, `run-until <trigger>`, `pause`, `status` |
+| Session | `info`, `status` (an alias of `info`) |
+| Run | `step [N]`, `run [N]`, `run-frame [N]`, `run-until <kind> [addr]` |
 | Registers | `regs`, `set-reg <name> <value>` |
-| Memory | `read <addr> [n]`, `write <addr> <bytes>`, `dump <addr> <n> <file>`, `fill <addr> <n> <byte>` |
-| Triggers | `break <addr\|symbol> [cond]`, `watch <addr> [cond]`, `on-io <port> [cond]`, `on-line <device.line> <level>`, `on-cycle <n>`, `on-irq`, `on-fetch`, `triggers`, `clear <id>` |
-| Video | `screenshot [--ppm|--png]`, `dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-framebuffer` |
+| Memory | `read <addr>`, `read-n <addr> <n>`, `write <addr> <bytes>`, `dump <addr> <n> <file>`, `fill <addr> <n> <byte>` |
+| Triggers | `break <addr>`, `watch <addr>`, `triggers`, `clear <id>` |
+| Video | `screenshot [--ppm|--png] <path>`, `dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-framebuffer` |
 | State | `save-state <file>`, `load-state <file>` |
 | Symbols | `symbols <file.opl>`, `sym <name>` |
 | Input | `inject <device> <event>`, `script <file>` |
-| Media | `mkv-input <script> -o <file>`, `mkv-render <input.mkv> -o <output.mkv>`, `render-session` |
+| Media | `mkv-input <script> -o <file>`, `mkv-render <input.mkv> <frames> -o <output.mkv>`, `render-session [frames] -o <file>` |
+| Session end | `quit`, `exit` |
 
-Deterministic run commands only. `run [N]` runs N machine units (cycles of
-the primary domain or display frames, as the machine declares). `run-until`
-accepts a trigger expression.
+Deterministic run commands only. `run [N]` runs N tick units of the
+primary domain; `run-until` accepts the event kinds `vblank`, `irq`,
+`fetch <addr>`, `read <addr>`, and `write <addr>`. The `load`,
+`config`, `reset`, `power`, `pause`, and `on-*` trigger-creation
+commands and the `--checks` flag of the plan are not implemented in
+this build; the machine assembles at startup only, and `run-until`
+covers the stop events. The condition form of `break` and `watch`
+is not reachable from the command surface.
 
 ### 7.3 JSON-lines protocol
 
@@ -380,13 +393,16 @@ path.
 
 Each device declares its boot state:
 
-- ROM devices load a file. The validation checks the file size against the
-  device capacity.
+- ROM devices load a file. As built, a flat static-memory device
+  truncates a large image at the device capacity. A boot-rom
+  device whose buffer starts empty loads nothing from a file path;
+  the boot ROMs load through the hex form.
 - RAM devices take a pattern: `zero`, `random(seed)`, or a fixed hex dump.
   The random pattern uses a deterministic seeded generator, so the same
   configuration boots identically everywhere.
 - CPU devices take register presets. The reset vector handling is
-  per-machine and documented in the machine chapter.
+  per-machine and documented in the machine chapter. An unknown
+  register name skips silently.
 
 ## 11. Save states
 
@@ -442,43 +458,33 @@ and demuxer. The pipeline:
 ## 13. CLI contract
 
 ```
-demu [OPTIONS] [ROM]
+demu - a cycle-accurate debugging emulator
+
+Usage:
+  demu [OPTIONS] [ROM]
+  demu config --check <file|triple>
+
+Options:
   --config <triple|file>   system configuration
   --symbols <file.opl>     symbol table
   --dump <path>            memory dump at exit
   --sentinel <addr>:<val>  compare byte, set exit code
-  --checks <file>          demu-native check file
   --json                   JSON-lines protocol on stdio
   --serve <path>           Unix-socket server mode
+  -h, --help               show this help
 ```
+
+The `--config` default selector is `smoke`; the session needs a real
+triple, because the demo binary registers no `smoke.*` constructors.
 
 Exit codes:
 
 - `0` — success, or sentinel pass.
-- `1` — run failure, sentinel miss, or a failed check.
+- `1` — sentinel miss only.
 - `2` — usage error, configuration error, or I/O error.
 
-The checks file (`--checks`) declares assertions that demu evaluates at a
-stop point: memory-region equality, trigger-hit assertions, and screenshot
-hashes. Its schema is TOML:
-
-```toml
-[[check]]
-at = { domain = "cpu", ticks = 70224 }   # or trigger = "..."
-kind = "memory"
-region = "wrram"
-expect_hex = "..."
-
-[[check]]
-at = { trigger = "vblank" }
-kind = "trigger-hit"
-trigger = "dmg"
-
-[[check]]
-at = { frame = 60 }
-kind = "screenshot"
-hash = "sha256:..."
-```
+The `--checks <file>` flag and its TOML schema are not implemented in
+this build; the checks file is a follow-up.
 
 ## 14. cart integration
 

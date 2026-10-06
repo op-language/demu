@@ -1,0 +1,41 @@
+# Socket-mode session evidence
+#
+# Generated from the client transcript below over the socket
+# /tmp/opencode/demu-ev.sock.
+#
+# demu launch command:
+#   demu --serve /tmp/opencode/demu-ev.sock --config sm83-nintendo-gameboy <dmg-demo.gb>
+#
+# The request lines and response lines are exactly what the client sent
+# and read. The long byte payload of the read response is abbreviated.
+
+>> {"id": 1, "cmd": "info"}
+<< {"id":1,"ok":true,"data":{"clocks":["main"],"description":"The 4.19 MHz monochrome Game Boy with the DMG boot ROM.","devices":["cpu0","bootrom","cart","wram","hram","ppu","apu","dma","timer","joypad","serial","io"],"frames":0,"name":"Nintendo Game Boy","now":0,"triple":"sm83-nintendo-gameboy"}}
+
+>> {"id": 2, "cmd": "step", "args": 60}
+<< {"id":2,"ok":true,"data":{"now":60,"start":0}}
+
+>> {"id": 3, "cmd": "read", "args": "0xFF40"}
+<< {"id":3,"ok":true,"data":{"addr":"0xff40","bytes":"91 82 00 00 00 00 FF FC FF FF 00 00 00 FF 00 00"}}
+
+>> {"id": 4, "cmd": "run-frame", "args": 1}
+<< {"id":4,"ok":true,"data":{"frames":[0,1],"now":65664,"start":60}}
+
+>> {"id": 5, "cmd": "screenshot", "args": "--png /tmp/opencode/ev-sock.png"}
+<< {"id":5,"ok":true,"data":{"format":"png","height":144,"path":"/tmp/opencode/ev-sock.png","width":160}}
+
+>> {"id": 6, "cmd": "break", "args": "0x0153"}
+<< {"id":6,"ok":true,"data":"trigger 1 set"}
+
+>> {"id": 7, "cmd": "triggers"}
+<< {"id":7,"ok":true,"data":"1: Breakpoint { address: Address(339) }"}
+
+>> {"id": 8, "cmd": "clear", "args": "1"}
+<< {"id":8,"ok":true,"data":"cleared"}
+
+>> {"id": 9, "cmd": "regs"}
+<< {"id":9,"ok":true,"data":{"A":0,"AF":32,"B":0,"BC":0,"C":0,"D":0,"DE":0,"E":0,"F":32,"H":150,"HL":38614,"IE":0,"IF":225,"IME":0,"L":214,"PC":8,"SP":65534}}
+
+>> {"id": 10, "cmd": "badcmd"}
+<< {"id":10,"ok":false,"error":{"code":"bad_args","message":"unknown command: badcmd"}}
+

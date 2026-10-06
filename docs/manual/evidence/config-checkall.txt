@@ -1,0 +1,136 @@
+$ demu config --check m68000-neogeo-aes.toml
+ok: Neo Geo AES (m68000-neogeo-aes) devices=16 clocks=2
+exit=0
+
+$ demu config --check m68000-sega-genesis.toml
+ok: Sega Mega Drive (m68000-sega-genesis) devices=10 clocks=2
+exit=0
+
+$ demu config --check mos6502-apple-iic.toml
+ok: Apple IIc (mos6502-apple-iic) devices=6 clocks=1
+exit=0
+
+$ demu config --check mos6502-apple-iie-enhanced.toml
+ok: Apple IIe (Enhanced) (mos6502-apple-iie-enhanced) devices=6 clocks=1
+exit=0
+
+$ demu config --check mos6502-apple-iie.toml
+ok: Apple IIe (mos6502-apple-iie) devices=6 clocks=1
+exit=0
+
+$ demu config --check mos6502-apple-ii.toml
+ok: Apple II (mos6502-apple-ii) devices=6 clocks=1
+exit=0
+
+$ demu config --check mos6502-atari-2600.toml
+ok: Atari 2600 (mos6502-atari-2600) devices=4 clocks=1
+exit=0
+
+$ demu config --check mos6502-atari-5200.toml
+ok: Atari 5200 (mos6502-atari-5200) devices=6 clocks=1
+exit=0
+
+$ demu config --check mos6502-atari-7800.toml
+ok: Atari 7800 (mos6502-atari-7800) devices=7 clocks=1
+exit=0
+
+$ demu config --check mos6502-atari-800-ntsc.toml
+ok: Atari 800 (NTSC) (mos6502-atari-800-ntsc) devices=6 clocks=1
+exit=0
+
+$ demu config --check mos6502-atari-800-pal.toml
+ok: Atari 800 (PAL) (mos6502-atari-800-pal) devices=6 clocks=1
+exit=0
+
+$ demu config --check mos6502-commodore-64-pal.toml
+ok: Commodore 64 (PAL) (mos6502-commodore-64-pal) devices=6 clocks=1
+exit=0
+
+$ demu config --check mos6502-commodore-64.toml
+ok: Commodore 64 (mos6502-commodore-64) devices=6 clocks=1
+exit=0
+
+$ demu config --check mos6502-nec-pcengine.toml
+ok: PC Engine (mos6502-nec-pcengine) devices=7 clocks=1
+exit=0
+
+$ demu config --check mos6502-nintendo-nes-ntsc.toml
+ok: Nintendo NES (NTSC, plain 6502) (mos6502-nintendo-nes-ntsc) devices=7 clocks=1
+exit=0
+
+$ demu config --check mos6502-nintendo-nes-pal.toml
+ok: Nintendo NES (PAL, plain 6502) (mos6502-nintendo-nes-pal) devices=7 clocks=1
+exit=0
+
+$ demu config --check rp2A03-nintendo-nes-ntsc.toml
+ok: Nintendo NES (NTSC) (rp2A03-nintendo-nes-ntsc) devices=7 clocks=1
+exit=0
+
+$ demu config --check rp2A07-nintendo-nes-pal.toml
+ok: Nintendo NES (PAL) (rp2A07-nintendo-nes-pal) devices=7 clocks=1
+exit=0
+
+$ demu config --check sm83-nintendo-gameboy-color.toml
+ok: Nintendo Game Boy Color (sm83-nintendo-gameboy-color) devices=13 clocks=1
+exit=0
+
+$ demu config --check sm83-nintendo-gameboy.toml
+ok: Nintendo Game Boy (sm83-nintendo-gameboy) devices=12 clocks=1
+exit=0
+
+$ demu config --check smoke.toml
+ok: smoke (smoke) devices=3 clocks=1
+exit=0
+
+$ demu config --check vl65nc02-atari-lynx.toml
+ok: Atari Lynx (vl65nc02-atari-lynx) devices=7 clocks=1
+exit=0
+
+$ demu config --check wdc65c816-apple-iigs.toml
+ok: Apple IIgs (wdc65c816-apple-iigs) devices=7 clocks=1
+exit=0
+
+$ demu config --check wdc65c816-nintendo-snes.toml
+ok: Nintendo SNES (wdc65c816-nintendo-snes) devices=7 clocks=2
+exit=0
+
+$ demu config --check z80-neogeo-aes.toml
+ok: Neo Geo AES (sound view) (z80-neogeo-aes) devices=16 clocks=2
+exit=0
+
+$ demu config --check z80-sega-gamegear.toml
+ok: Sega Game Gear (z80-sega-gamegear) devices=6 clocks=1
+exit=0
+
+$ demu config --check z80-sega-genesis.toml
+ok: Sega Mega Drive (sound view) (z80-sega-genesis) devices=10 clocks=2
+exit=0
+
+$ demu config --check z80-sega-mastersystem.toml
+ok: Sega Master System (z80-sega-mastersystem) devices=6 clocks=1
+exit=0
+
+$ demu config --check z80-sega-sg1000.toml
+ok: Sega SG-1000 (z80-sega-sg1000) devices=6 clocks=1
+exit=0
+
+$ demu config --check z80-sinclair-spectrum128.toml
+ok: Sinclair ZX Spectrum 128K (z80-sinclair-spectrum) devices=6 clocks=1
+exit=0
+
+$ demu config --check z80-sinclair-spectrum.toml
+ok: Sinclair ZX Spectrum (z80-sinclair-spectrum) devices=6 clocks=1
+exit=0
+
+$ demu config --check z80-sinclair-zx80.toml
+ok: Sinclair ZX80 (z80-sinclair-zx80) devices=4 clocks=1
+exit=0
+
+$ demu config --check z80-sinclair-zx81.toml
+ok: Sinclair ZX81 (z80-sinclair-zx81) devices=4 clocks=1
+exit=0
+
+$ demu config --check z80-ti-85.toml
+ok: Texas Instruments TI-85 (z80-ti-85) devices=4 clocks=1
+exit=0
+
