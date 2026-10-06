@@ -1,7 +1,7 @@
 # demu Technical Design
 
 This document is the technical specification of `demu`, a cycle-accurate
-debugging emulator for the 32 target triples that `opc` and `std` support.
+debugging emulator for the 30 target triples that `opc` and `std` support.
 The words MUST, MUST NOT, SHALL, SHALL NOT, and MAY are RFC 2119 words.
 
 The prose in this document follows ASD-STE100 (strict): short sentences, one
