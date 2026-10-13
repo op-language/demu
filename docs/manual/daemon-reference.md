@@ -112,7 +112,9 @@ packaging/install.sh
 The script's steps: it checks the binary, installs the machine
 configs into the demu config directory (the resolution of that search
 lives in section 2 of the
-[config reference](config-reference.md)), merges the
+[config reference](config-reference.md)), installs the documentation
+of `docs/` into `~/.config/demu/docs` (the installed path that the
+demu-rom-dev skill references), merges the
 `mcp.servers.demu` entry of the example into the global OpenCode
 configuration, copies the skills of `.opencode/skills` into the
 global skills directory, installs the unit into

@@ -51,7 +51,8 @@ covers the installs.
 
 `packaging/install.sh` installs everything for one user: it checks the
 `cargo install --path crates/demu` binary, installs the machine
-configs into the demu config directory, merges the MCP entry of
+configs into the demu config directory, installs the `docs/` manuals
+into `~/.config/demu/docs`, merges the MCP entry of
 `docs/examples/opencode.jsonc` and the skills of `.opencode/skills`
 into the global `~/.config/opencode` configuration, installs the user
 unit into `~/.config/systemd/user`, and enables the service.

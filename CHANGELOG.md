@@ -29,7 +29,8 @@ bump `z`.
   it.
 - The install script `packaging/install.sh`. One run checks the
   `cargo install --path crates/demu` binary, installs the machine
-  configs of `configs/` into the demu config directory, merges the
+  configs of `configs/` into the demu config directory, installs the
+  `docs/` tree into `~/.config/demu/docs`, merges the
   `mcp.servers.demu` entry of `docs/examples/opencode.jsonc` into the
   global OpenCode configuration (with a `.bak` backup beside the
   rewritten file), copies every skill of `.opencode/skills` into the

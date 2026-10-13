@@ -8,13 +8,16 @@
 #   2. The machine configs of configs/ into the XDG config path
 #      ${XDG_CONFIG_HOME:-$HOME/.config}/demu/configs, so demu
 #      resolves bare triple names from there beside its bundled copies.
-#   3. The OpenCode integration: the mcp.servers.demu entry of
+#   3. The documentation of docs/ into the XDG config path
+#      ${XDG_CONFIG_HOME:-$HOME/.config}/demu/docs, which the
+#      demu-rom-dev skill references as the installed reference path.
+#   4. The OpenCode integration: the mcp.servers.demu entry of
 #      docs/examples/opencode.jsonc merged into the global OpenCode
 #      configuration ~/.config/opencode/opencode.json(c), and every
 #      skill directory of .opencode/skills copied into
 #      ~/.config/opencode/skills. Merging replaces only the demu MCP
 #      entry and leaves every other setting of the local file alone.
-#   4. The user unit packaging/systemd/demu.service into
+#   5. The user unit packaging/systemd/demu.service into
 #      ${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user, reloaded
 #      systemd, and the service enabled for the next login.
 #
@@ -41,6 +44,7 @@ set -euo pipefail
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly DEMU_BIN="${HOME}/.cargo/bin/demu"
 readonly DEMU_CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/demu/configs"
+readonly DEMU_DOCS_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/demu/docs"
 readonly SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 readonly OPENCODE_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/opencode"
 readonly DEMU_MCP_URL="${DEMU_MCP_URL:-http://127.0.0.1:6502/mcp}"
@@ -104,7 +108,14 @@ done
 echo "machine configs: ${DEMU_CONFIG_DIR} (${installed_configs} installed, ${kept_configs} kept)"
 
 # ---------------------------------------------------------------------------
-# 3. The OpenCode integration: the merged MCP entry and the skills.
+# 3. The documentation into the demu XDG config path.
+# ---------------------------------------------------------------------------
+mkdir -p "${DEMU_DOCS_DIR}"
+cp -R "${REPO_ROOT}/docs/." "${DEMU_DOCS_DIR}/"
+echo "documentation: ${DEMU_DOCS_DIR} (refreshed)"
+
+# ---------------------------------------------------------------------------
+# 4. The OpenCode integration: the merged MCP entry and the skills.
 # ---------------------------------------------------------------------------
 mkdir -p "${OPENCODE_DIR}/skills"
 python3 - "${REPO_ROOT}/docs/examples/opencode.jsonc" "${OPENCODE_DIR}" "${DEMU_MCP_URL}" <<'PY'
@@ -189,7 +200,7 @@ for skill in "${REPO_ROOT}"/.opencode/skills/*/; do
 done
 
 # ---------------------------------------------------------------------------
-# 4. The systemd user unit: install, reload, enable.
+# 5. The systemd user unit: install, reload, enable.
 # ---------------------------------------------------------------------------
 mkdir -p "${SYSTEMD_USER_DIR}"
 install -m 644 "${REPO_ROOT}/packaging/systemd/demu.service" \
