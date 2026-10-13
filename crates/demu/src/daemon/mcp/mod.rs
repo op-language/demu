@@ -3,10 +3,13 @@
 //! Clients connect to `http://<bind>/mcp`. One MCP connection owns one
 //! transport session from the local session manager, while the
 //! emulator sessions live daemon-wide in the registry and survive
-//! client disconnects. The tools live in [`tools`]; every tool bridges
-//! to its session worker through a blocking job, so machine work never
-//! joins the HTTP runtime.
+//! client disconnects. The session tools and the command passthrough
+//! live in [`tools`], and the named debug tools live in
+//! [`self::debug_tools`]; every session-carrying tool bridges to its
+//! session worker through a blocking job, so machine work never joins
+//! the HTTP runtime.
 
+mod debug_tools;
 mod tools;
 
 use std::net::SocketAddr;
@@ -227,10 +230,26 @@ mod tests {
     }
 
     /// A minimal Game Boy cartridge image: a jump frame and a parked tail.
+    ///
+    /// The boot ROM gates the boot twice: it compares the logo bytes
+    /// at 0x104 through 0x133 against its own table and locks on a
+    /// mismatch, then verifies the header checksum at 0x14D. The test
+    /// ROM embeds the bundled logo bytes and the checksum byte of the
+    /// zero-filled header, so the machine boots through the bootloader
+    /// and reaches the jump frame.
     fn gb_rom() -> Vec<u8> {
         let mut rom = vec![0u8; 0x8000];
         rom[0x100..0x108].copy_from_slice(&[0x00, 0xC3, 0x50, 0x01, 0x00, 0x00, 0x00, 0x00]);
+        rom[0x104..0x134].copy_from_slice(&[
+            0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, //
+            0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D, //
+            0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, //
+            0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, //
+            0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, //
+            0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E, //
+        ]);
         rom[0x150..0x152].copy_from_slice(&[0x76, 0x76]);
+        rom[0x14D] = 0xE7;
         rom
     }
 
@@ -247,6 +266,17 @@ mod tests {
             "session_info",
             "session_destroy",
             "command",
+            "run",
+            "run_frame",
+            "run_until",
+            "step",
+            "read_memory",
+            "write_memory",
+            "regs",
+            "set_reg",
+            "break",
+            "watch",
+            "screenshot",
         ] {
             assert!(
                 names.iter().any(|name| name == expected),
@@ -395,6 +425,592 @@ mod tests {
         );
 
         call(&client, "session_destroy", json!({"name": "shellsession"}))
+            .await
+            .expect("the destroy runs");
+        let _ = client.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn the_debug_tools_drive_a_game_boy_session_and_log_the_calls() {
+        let registry = Arc::new(Registry::new(8));
+        let data_root = temp_root("debug-tools");
+        let server = spawn_server(Arc::clone(&registry), data_root.clone()).await;
+        let client = connect(&server.url).await;
+
+        use base64::Engine as _;
+        let rom_b64 = base64::engine::general_purpose::STANDARD.encode(gb_rom());
+        let created = call(
+            &client,
+            "session_create",
+            json!({
+                "name": "debugged",
+                "config_triple": "sm83-nintendo-gameboy",
+                "rom_base64": rom_b64,
+            }),
+        )
+        .await
+        .expect("the session creates");
+        let output_dir: String = result_json(&created)["output_dir"]
+            .as_str()
+            .expect("the output dir is text")
+            .to_owned();
+
+        // The breakpoint arms first, so the free run parks on it.
+        let broken = call(
+            &client,
+            "break",
+            json!({"name": "debugged", "addr": "0x150"}),
+        )
+        .await
+        .expect("the break runs");
+        assert_eq!(
+            result_json(&broken),
+            json!("trigger 1 set"),
+            "the break reports its trigger id"
+        );
+
+        let free = call(&client, "run", json!({"name": "debugged"}))
+            .await
+            .expect("the free run stops on the breakpoint");
+        let free = result_json(&free);
+        assert_eq!(
+            free["trigger_hit"], true,
+            "the breakpoint parks the free run: {free:?}"
+        );
+        assert!(
+            free["now"].as_u64().expect("the run reports now")
+                > free["start"].as_u64().expect("the run reports start"),
+            "the free run advanced to the breakpoint: {free:?}"
+        );
+
+        let stepped = call(&client, "step", json!({"name": "debugged", "units": 8}))
+            .await
+            .expect("the step runs");
+        let stepped = result_json(&stepped);
+        assert!(
+            stepped["now"].as_u64().expect("the step reports now")
+                >= stepped["start"].as_u64().expect("the step reports start") + 8,
+            "a bounded step advances at least its units: {stepped:?}"
+        );
+
+        call(
+            &client,
+            "set_reg",
+            json!({"name": "debugged", "reg": "A", "value": 66}),
+        )
+        .await
+        .expect("the register set runs");
+        let regs = call(&client, "regs", json!({"name": "debugged"}))
+            .await
+            .expect("the registers read runs");
+        let regs = result_json(&regs);
+        assert_eq!(regs["A"], 66, "the register round trip lands: {regs:?}");
+
+        let readed = call(
+            &client,
+            "read_memory",
+            json!({"name": "debugged", "addr": "0xFF44", "count": 4}),
+        )
+        .await
+        .expect("the read runs");
+        let readed = result_json(&readed);
+        assert_eq!(
+            readed["addr"],
+            json!("0xff44"),
+            "the read echoes the resolved address: {readed:?}"
+        );
+        assert_eq!(
+            readed["bytes"]
+                .as_str()
+                .expect("the read carries a hex text")
+                .split(' ')
+                .count(),
+            4,
+            "the count applies: {readed:?}"
+        );
+
+        let written = call(
+            &client,
+            "write_memory",
+            json!({"name": "debugged", "addr": "0xC000", "bytes_hex": "AB CD"}),
+        )
+        .await
+        .expect("the write runs");
+        let written = result_json(&written);
+        assert_eq!(written["written"], 2, "both bytes land: {written:?}");
+
+        let read_back = call(
+            &client,
+            "read_memory",
+            json!({"name": "debugged", "addr": "0xC000", "count": 2}),
+        )
+        .await
+        .expect("the read-back runs");
+        assert_eq!(
+            result_json(&read_back)["bytes"],
+            json!("AB CD"),
+            "the write landed in memory"
+        );
+
+        let watched = call(
+            &client,
+            "watch",
+            json!({"name": "debugged", "addr": "0xC000"}),
+        )
+        .await
+        .expect("the watch runs");
+        assert_eq!(result_json(&watched), json!("trigger 2 set"));
+
+        let triggers = call(
+            &client,
+            "command",
+            json!({"name": "debugged", "cmd": "triggers", "args": []}),
+        )
+        .await
+        .expect("the trigger list runs");
+        let triggers = result_json(&triggers);
+        assert_eq!(
+            triggers["ok"], true,
+            "the trigger list succeeds: {triggers:?}"
+        );
+        let rendered = triggers["data"].to_string();
+        assert!(
+            rendered.contains("Breakpoint") && rendered.contains("WriteWatch"),
+            "the trigger list shows the breakpoint and the watchpoint: {rendered}"
+        );
+
+        let bounded = call(&client, "run", json!({"name": "debugged", "units": 60}))
+            .await
+            .expect("the bounded run runs");
+        let bounded = result_json(&bounded);
+        assert!(
+            bounded["now"].as_u64().expect("the run reports now")
+                >= bounded["start"].as_u64().expect("the run reports start") + 60,
+            "the bounded run reaches its units: {bounded:?}"
+        );
+
+        let frames = call(
+            &client,
+            "run_frame",
+            json!({"name": "debugged", "frames": 2}),
+        )
+        .await
+        .expect("the frame run completes");
+        let frames = result_json(&frames);
+        let frame_pair = frames["frames"].as_array().expect("the frame pair");
+        assert!(
+            frame_pair[1].as_u64().expect("the end frames")
+                > frame_pair[0].as_u64().expect("the start frames"),
+            "two display frames complete: {frames:?}"
+        );
+
+        let vblank = call(
+            &client,
+            "run_until",
+            json!({"name": "debugged", "event": "vblank"}),
+        )
+        .await
+        .expect("the run until the next vblank completes");
+        let vblank = result_json(&vblank);
+        assert_eq!(
+            vblank["event"], "Vblank",
+            "the run until reports the fired vblank: {vblank:?}"
+        );
+
+        // Two captures on one parked tick: the second gains -1.
+        let first = call(&client, "screenshot", json!({"name": "debugged"}))
+            .await
+            .expect("the screenshot captures");
+        let second = call(&client, "screenshot", json!({"name": "debugged"}))
+            .await
+            .expect("the second screenshot captures");
+        let blocks: Vec<&CallToolResult> = vec![&first, &second];
+        let mut paths = Vec::new();
+        for (attempt, block) in blocks.into_iter().enumerate() {
+            let image = block
+                .content
+                .first()
+                .and_then(|content| content.as_image())
+                .expect("the screenshot carries an image block");
+            assert_eq!(image.mime_type, "image/png");
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(&image.data)
+                .expect("the image decodes");
+            let text = block
+                .content
+                .get(1)
+                .and_then(|content| content.as_text())
+                .expect("the screenshot carries a text block")
+                .text
+                .clone();
+            let payload: Value = serde_json::from_str(&text).expect("the text payload is JSON");
+            assert_eq!(
+                payload["width"], 160,
+                "the game boy frame width: {payload:?}"
+            );
+            assert_eq!(
+                payload["height"], 144,
+                "the game boy frame height: {payload:?}"
+            );
+            assert_eq!(
+                payload["size"],
+                decoded.len() as u64,
+                "the size matches the image bytes: {payload:?}"
+            );
+            let path = payload["path"].as_str().expect("the path is text");
+            assert!(
+                path.starts_with(&output_dir) && path.ends_with(".png"),
+                "the screenshot lands in the session directory: {path}"
+            );
+            if attempt == 1 {
+                assert!(
+                    path.ends_with("-1.png"),
+                    "the second capture on one tick gains the -1 suffix: {path}"
+                );
+            }
+            assert!(
+                std::path::Path::new(path).exists(),
+                "the capture wrote its file: {path}"
+            );
+            paths.push(path.to_owned());
+        }
+        assert_ne!(paths[0], paths[1], "the two captures name different files");
+
+        let failed = call(
+            &client,
+            "command",
+            json!({"name": "debugged", "cmd": "frobnicate", "args": []}),
+        )
+        .await
+        .expect("the failing passthrough reports the shell error as a result");
+        let failed = result_json(&failed);
+        assert_eq!(failed["ok"], false);
+        assert_eq!(failed["error"]["code"], "bad_args");
+
+        call(&client, "session_destroy", json!({"name": "debugged"}))
+            .await
+            .expect("the destroy runs");
+
+        // The session command log: one request-response pair per logged
+        // tool call, in call order.
+        let log_text =
+            std::fs::read_to_string(std::path::Path::new(&output_dir).join("session.jsonl"))
+                .expect("the session command log reads back");
+        let entries: Vec<Value> = log_text
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("each log line is JSON"))
+            .collect();
+        assert_eq!(
+            entries.len(),
+            32,
+            "16 logged calls pair into request and response entries: {log_text}"
+        );
+        let expected_tools = [
+            "break",
+            "run",
+            "step",
+            "set_reg",
+            "regs",
+            "read_memory",
+            "write_memory",
+            "read_memory",
+            "watch",
+            "command",
+            "run",
+            "run_frame",
+            "run_until",
+            "screenshot",
+            "screenshot",
+            "command",
+        ];
+        for (index, expected) in expected_tools.iter().enumerate() {
+            let request = &entries[index * 2];
+            let response = &entries[index * 2 + 1];
+            assert_eq!(request["direction"], "request", "call {expected}");
+            assert_eq!(request["tool"], *expected, "the request names its tool");
+            assert!(
+                request["wall_ms"].as_u64().is_some(),
+                "the request carries the wall clock"
+            );
+            assert_eq!(response["direction"], "response", "call {expected}");
+            assert_eq!(response["tool"], *expected, "the response names its tool");
+            assert!(
+                response["tick"].as_u64().is_some(),
+                "the response carries the machine tick"
+            );
+            assert!(
+                response["wall_ms"].as_u64().is_some(),
+                "the response carries the wall clock"
+            );
+        }
+        assert_eq!(
+            entries[0]["args"],
+            json!({"addr": "0x150"}),
+            "the break records its address"
+        );
+        assert_eq!(
+            entries[2]["args"],
+            json!({}),
+            "the free run records no units"
+        );
+        assert_eq!(
+            entries[4]["args"],
+            json!({"units": 8}),
+            "the step records its units"
+        );
+        assert_eq!(entries[6]["args"], json!({"reg": "A", "value": 66}));
+        assert_eq!(entries[10]["args"], json!({"addr": "0xFF44", "count": 4}));
+        assert_eq!(
+            entries[12]["args"],
+            json!({"addr": "0xC000", "bytes_hex": "AB CD"})
+        );
+        assert_eq!(
+            entries[14]["args"],
+            json!({"addr": "0xC000", "count": 2}),
+            "the read-back records its address and count"
+        );
+        assert_eq!(
+            entries[16]["args"],
+            json!({"addr": "0xC000"}),
+            "the watch records its address"
+        );
+        assert_eq!(
+            entries[18]["args"],
+            json!({"cmd": "triggers", "args": []}),
+            "the passthrough records its command as received"
+        );
+        assert_eq!(entries[20]["args"], json!({"units": 60}));
+        assert_eq!(entries[22]["args"], json!({"frames": 2}));
+        assert_eq!(entries[24]["args"], json!({"event": "vblank"}));
+        assert_eq!(
+            entries[26]["args"],
+            json!({}),
+            "the screenshots record no args"
+        );
+        assert_eq!(entries[28]["args"], json!({}));
+        assert_eq!(
+            entries[30]["args"],
+            json!({"cmd": "frobnicate", "args": []})
+        );
+        for (index, entry) in entries.iter().enumerate() {
+            if index == 31 {
+                assert_eq!(
+                    entry["ok"], false,
+                    "the failing passthrough records its failure"
+                );
+            } else if index % 2 == 1 {
+                assert_eq!(entry["ok"], true, "response {index}: {entry}");
+                assert!(
+                    entry.get("error").is_none(),
+                    "the successful response carries no error key"
+                );
+            }
+        }
+        assert_eq!(
+            entries[31]["error"], "bad_args",
+            "the failing response records the protocol error code"
+        );
+        assert!(
+            entries.iter().all(|entry| {
+                let tool = entry["tool"].as_str().expect("each entry names its tool");
+                !matches!(
+                    tool,
+                    "session_create" | "session_list" | "session_info" | "session_destroy"
+                )
+            }),
+            "the session management tools log nothing"
+        );
+        let _ = client.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn the_debug_tools_reject_bad_arguments_cleanly() {
+        let registry = Arc::new(Registry::new(8));
+        let server = spawn_server(registry, temp_root("debug-args")).await;
+        let client = connect(&server.url).await;
+
+        use base64::Engine as _;
+        let rom_b64 = base64::engine::general_purpose::STANDARD.encode(gb_rom());
+        call(
+            &client,
+            "session_create",
+            json!({
+                "name": "argcheck",
+                "config_triple": "sm83-nintendo-gameboy",
+                "rom_base64": rom_b64,
+            }),
+        )
+        .await
+        .expect("the session creates");
+
+        // The capture on the fresh boot reports the machine's cached
+        // frame at tick 0.
+        let boot_shot = call(&client, "screenshot", json!({"name": "argcheck"}))
+            .await
+            .expect("the capture on the fresh boot reports the cached frame");
+        let boot_text = boot_shot
+            .content
+            .get(1)
+            .and_then(|content| content.as_text())
+            .expect("the screenshot carries a text block")
+            .text
+            .clone();
+        let boot_payload: Value =
+            serde_json::from_str(&boot_text).expect("the text payload is JSON");
+        assert_eq!(
+            boot_payload["width"], 160,
+            "the cached frame width: {boot_payload:?}"
+        );
+        assert!(
+            boot_payload["path"]
+                .as_str()
+                .expect("the path is text")
+                .ends_with("screenshot-0.png"),
+            "the fresh boot capture lands at tick 0: {boot_payload:?}"
+        );
+
+        let over_cap = call(
+            &client,
+            "read_memory",
+            json!({"name": "argcheck", "addr": "0x8000", "count": 65537}),
+        )
+        .await;
+        assert!(
+            over_cap
+                .expect_err("the over-cap read fails")
+                .to_string()
+                .contains("byte cap"),
+            "the over-cap read names the cap"
+        );
+
+        let odd_digits = call(
+            &client,
+            "write_memory",
+            json!({"name": "argcheck", "addr": "0xC000", "bytes_hex": "XYZ"}),
+        )
+        .await;
+        assert!(
+            odd_digits
+                .expect_err("the odd digit text fails")
+                .to_string()
+                .contains("hex digit pairs"),
+            "the odd digit text names the hex form"
+        );
+
+        let empty_bytes = call(
+            &client,
+            "write_memory",
+            json!({"name": "argcheck", "addr": "0xC000", "bytes_hex": ""}),
+        )
+        .await;
+        assert!(
+            empty_bytes
+                .expect_err("the empty text fails")
+                .to_string()
+                .contains("at least one byte"),
+            "the empty text names the byte rule"
+        );
+
+        let unknown_event = call(
+            &client,
+            "run_until",
+            json!({"name": "argcheck", "event": "banana"}),
+        )
+        .await;
+        assert!(
+            unknown_event
+                .expect_err("the unknown event fails")
+                .to_string()
+                .contains("unknown run_until event"),
+            "the unknown event names the shell event forms"
+        );
+
+        let unknown_register = call(
+            &client,
+            "set_reg",
+            json!({"name": "argcheck", "reg": "ZZ", "value": 1}),
+        )
+        .await;
+        assert!(
+            unknown_register
+                .expect_err("the unknown register fails")
+                .to_string()
+                .contains("unknown register"),
+            "the unknown register names the register"
+        );
+
+        let missing = call(&client, "run", json!({"name": "missing", "units": 1})).await;
+        assert!(
+            missing
+                .expect_err("the missing session fails")
+                .to_string()
+                .contains("no session named missing"),
+            "the missing session names the session"
+        );
+
+        call(&client, "session_destroy", json!({"name": "argcheck"}))
+            .await
+            .expect("the destroy runs");
+        let _ = client.cancel().await;
+    }
+
+    #[tokio::test]
+    async fn a_screenshot_on_a_machine_without_video_fails_cleanly() {
+        let registry = Arc::new(Registry::new(8));
+        let server = spawn_server(registry, temp_root("no-video")).await;
+        let client = connect(&server.url).await;
+
+        // The ZX80 machine with its ULA removed: no video device.
+        let config_toml = {
+            let mut text = String::from(
+                "# A Z80 machine with no video device: the ULA of the ZX80\
+                 triple is gone.\n",
+            );
+            text.push_str("[system]\nname = \"Z80 No Video\"\ntriple = \"z80-no-video\"\n\n");
+            text.push_str("[clock.main]\nfrequency = \"3250000\"\n\n");
+            text.push_str(
+                "[[device]]\nname = \"cpu0\"\nkind = \"z80.cpu\"\ndomain = \"main\"\n\
+                 [device.dividers]\ncpu = 1\n[device.params]\nbus = \"cpu\"\n\n",
+            );
+            text.push_str(
+                "[[device]]\nname = \"rom0\"\nkind = \"z80.rom\"\ndomain = \"main\"\n\
+                 [device.params]\nsize = 4096\n\n",
+            );
+            text.push_str(
+                "[[device]]\nname = \"ram0\"\nkind = \"z80.ram\"\ndomain = \"main\"\n\
+                 [device.params]\nsize = 1024\n\n",
+            );
+            text.push_str("[[bus]]\nname = \"cpu\"\naddress_bits = 16\nowner = \"cpu0\"\n\n");
+            text.push_str(
+                "[[window]]\nname = \"w_rom\"\nbus = \"cpu\"\ndevice = \"rom0\"\n\
+                 base = \"0x0000\"\nsize = \"0x1000\"\n\n",
+            );
+            text.push_str(
+                "[[window]]\nname = \"w_ram\"\nbus = \"cpu\"\ndevice = \"ram0\"\n\
+                 base = \"0x4000\"\nsize = \"0x0400\"\n\n",
+            );
+            text.push_str("[boot.cpu0]\nregisters = { pc = \"0x0000\" }\n\n");
+            text.push_str("[boot.rom0]\nhex = \"\"\"f3760000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000018fe\"\"\"\n");
+            text
+        };
+        call(
+            &client,
+            "session_create",
+            json!({"name": "novideo", "config_toml": config_toml}),
+        )
+        .await
+        .expect("the no-video session creates");
+
+        let capture = call(&client, "screenshot", json!({"name": "novideo"})).await;
+        assert!(
+            capture
+                .expect_err("the capture without video fails")
+                .to_string()
+                .contains("no video device"),
+            "the capture names the missing video device"
+        );
+
+        call(&client, "session_destroy", json!({"name": "novideo"}))
             .await
             .expect("the destroy runs");
         let _ = client.cancel().await;

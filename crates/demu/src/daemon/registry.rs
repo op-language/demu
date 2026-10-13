@@ -16,8 +16,8 @@ use serde_json::Value;
 
 use super::confinement::ConfinementDir;
 use super::session::{
-    SessionCreated, SessionError, SessionJob, SessionName, SessionSpec, WorkerInstruction,
-    WorkerJob, resolve_source, spawn_worker,
+    SessionCreated, SessionError, SessionJob, SessionName, SessionSpec, ToolCall,
+    WorkerInstruction, WorkerJob, resolve_source, spawn_worker,
 };
 
 /// The bookkeeping slot of one live session.
@@ -222,11 +222,33 @@ impl Registry {
 
     /// Send one command job to a session worker and wait for its
     /// reply.
+    pub fn submit(&self, name: &SessionName, job: SessionJob) -> Result<Value, SessionError> {
+        self.dispatch(name, None, job)
+    }
+
+    /// Send one MCP-driven command job to a session worker, and record
+    /// the call around its execution in the session command log.
+    pub fn submit_logged(
+        &self,
+        name: &SessionName,
+        call: ToolCall,
+        job: SessionJob,
+    ) -> Result<Value, SessionError> {
+        self.dispatch(name, Some(call), job)
+    }
+
+    /// Send one command job with its optional log descriptor to a
+    /// session worker and wait for the reply.
     ///
     /// The job runs on the worker thread against the session's machine
     /// service and confinement directory; the result returns over the
     /// job's one-shot reply channel.
-    pub fn submit(&self, name: &SessionName, job: SessionJob) -> Result<Value, SessionError> {
+    fn dispatch(
+        &self,
+        name: &SessionName,
+        logged: Option<ToolCall>,
+        job: SessionJob,
+    ) -> Result<Value, SessionError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         let (queue, generation) = {
             let mut map = self.lock();
@@ -240,6 +262,7 @@ impl Registry {
             .send(WorkerJob {
                 job,
                 reply: reply_tx,
+                logged,
             })
             .is_err()
         {
@@ -303,7 +326,7 @@ fn discard_worker(queue: mpsc::Sender<WorkerJob>, thread: std::thread::JoinHandl
 mod tests {
     use super::*;
     use crate::daemon::session::ConfigSource;
-    use demu_shell::service::CommandError;
+    use demu_shell::service::{CommandError, CommandOutput};
 
     /// The temp path of a test fixture, without touching the file system.
     fn tmp_path(case: &str) -> std::path::PathBuf {
@@ -557,6 +580,80 @@ domain = "main"
             registry.info(&SessionName::new("smokefall").expect("name")),
             Err(SessionError::Unknown(_))
         ));
+    }
+
+    #[test]
+    fn the_session_log_records_tool_calls() {
+        let registry = Registry::new(4);
+        let mut game = spec("logged", "log");
+        game.rom = Some(gb_rom());
+        let created = registry.create(game).expect("the session creates");
+        let name = SessionName::new("logged").expect("name");
+        registry
+            .submit_logged(
+                &name,
+                ToolCall::new(
+                    "read_memory",
+                    serde_json::json!({"addr": "0x8000", "count": 16}),
+                ),
+                Box::new(|service, _confined| {
+                    let CommandOutput::Text { json, .. } = service.read("0x8000", 16)?;
+                    Ok(json)
+                }),
+            )
+            .expect("the read runs");
+        registry
+            .submit_logged(
+                &name,
+                ToolCall::new("command", serde_json::json!({"cmd": "nope"})),
+                Box::new(|_service, _confined| {
+                    Err::<Value, CommandError>(CommandError::BadArgs(
+                        "unknown command: nope".to_owned(),
+                    ))
+                }),
+            )
+            .expect_err("the failing job reports its command error");
+        // A plain submit logs nothing; the info tool call is invisible
+        // in the session log.
+        registry.info(&name).expect("the info runs");
+        registry.destroy(&name).expect("destroy joins the worker");
+        let text = std::fs::read_to_string(created.output_dir.join("session.jsonl"))
+            .expect("the session log reads back");
+        let entries: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("each log line is JSON"))
+            .collect();
+        assert_eq!(
+            entries.len(),
+            4,
+            "one request-response pair per logged call: {text}"
+        );
+        assert_eq!(entries[0]["direction"], "request");
+        assert_eq!(entries[0]["tool"], "read_memory");
+        assert_eq!(
+            entries[0]["args"],
+            serde_json::json!({"addr": "0x8000", "count": 16})
+        );
+        assert_eq!(entries[1]["direction"], "response");
+        assert_eq!(entries[1]["tool"], "read_memory");
+        assert_eq!(entries[1]["ok"], true);
+        assert!(
+            entries[1].get("error").is_none(),
+            "the ok response carries no error key"
+        );
+        assert_eq!(entries[2]["direction"], "request");
+        assert_eq!(entries[2]["tool"], "command");
+        assert_eq!(entries[3]["direction"], "response");
+        assert_eq!(entries[3]["ok"], false);
+        assert_eq!(entries[3]["error"], "bad_args");
+        assert!(
+            !text.contains("session_info"),
+            "the info tool call is unlogged"
+        );
+        // Every response entry carries its `wall_ms` metadata.
+        for entry in &entries {
+            assert!(entry["wall_ms"].as_u64().is_some(), "{entry}");
+        }
     }
 
     #[test]

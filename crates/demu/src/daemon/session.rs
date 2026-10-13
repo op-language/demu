@@ -4,8 +4,10 @@
 //! the CLI bootstrap on submitted data, and serves an ordered queue of
 //! command closures until every queue sender is gone.
 
+use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::sync::mpsc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use demu_shell::service::{CommandError, MachineService};
 use serde_json::Value;
@@ -190,12 +192,153 @@ pub enum SessionError {
 pub type SessionJob =
     Box<dyn FnOnce(&mut MachineService, &ConfinementDir) -> Result<Value, CommandError> + Send>;
 
+/// One MCP-driven tool call, recorded around its execution in the
+/// session command log.
+#[derive(Debug, Clone)]
+pub(crate) struct ToolCall {
+    /// The MCP tool name, as the client names it, such as `run` or
+    /// `command`.
+    pub(crate) tool: String,
+    /// The key arguments of the call, without the session name.
+    pub(crate) args: Value,
+}
+
+impl ToolCall {
+    /// Build one call descriptor from its tool name and arguments.
+    pub(crate) fn new(tool: impl Into<String>, args: Value) -> Self {
+        Self {
+            tool: tool.into(),
+            args,
+        }
+    }
+}
+
+/// The per-session command log: `<output-dir>/session.jsonl`.
+///
+/// One JSON object per MCP-driven command (direction `request`) and
+/// one per response (direction `response`). The file opens with the
+/// first entry, in create-plus-append mode, and entries buffer through
+/// a [`BufWriter`] with an explicit flush per entry. One write failure
+/// disables the log for the session's lifetime and records one daemon
+/// event on stderr; a log failure never fails a command. The log grows
+/// append-only, so a reused session name keeps the earlier eras'
+/// entries and a reader sees an era boundary where the tick starts
+/// again.
+pub(crate) struct SessionLog {
+    /// The log file path, built from the session's confinement root.
+    path: std::path::PathBuf,
+    /// The buffered writer, opened with the first entry.
+    writer: Option<BufWriter<std::fs::File>>,
+    /// Set after the first write failure; the log then stays disabled.
+    failed: bool,
+}
+
+impl SessionLog {
+    /// A fresh log for the session output directory; nothing touches
+    /// the file system until the first entry.
+    pub(crate) fn new(confined: &ConfinementDir) -> Self {
+        Self {
+            path: confined.root().join("session.jsonl"),
+            writer: None,
+            failed: false,
+        }
+    }
+
+    /// Record the request entry for one MCP-driven call: the `request`
+    /// direction, the tool name, the key arguments, and the wall clock.
+    pub(crate) fn record_request(&mut self, call: &ToolCall) {
+        self.write_entry(serde_json::json!({
+            "direction": "request",
+            "tool": call.tool,
+            "args": call.args,
+            "wall_ms": wall_ms(),
+        }));
+    }
+
+    /// Record the response entry for one MCP-driven call: the
+    /// `response` direction, the success flag, the protocol error code
+    /// string on failure, and the post-execution machine tick.
+    pub(crate) fn record_response(
+        &mut self,
+        call: &ToolCall,
+        ok: bool,
+        error: Option<&str>,
+        tick: u64,
+    ) {
+        let mut entry = serde_json::json!({
+            "direction": "response",
+            "tool": call.tool,
+            "ok": ok,
+            "tick": tick,
+            "wall_ms": wall_ms(),
+        });
+        if let Some(code) = error {
+            entry["error"] = serde_json::Value::String(code.to_owned());
+        }
+        self.write_entry(entry);
+    }
+
+    /// Write one entry. The first entry opens the file in
+    /// create-plus-append mode; any open, write, or flush failure
+    /// disables the log and the session keeps serving commands.
+    fn write_entry(&mut self, entry: Value) {
+        if self.failed {
+            return;
+        }
+        if self.writer.is_none() {
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+            {
+                Ok(file) => self.writer = Some(BufWriter::new(file)),
+                Err(error) => {
+                    self.disable(&error);
+                    return;
+                }
+            }
+        }
+        let Some(writer) = self.writer.as_mut() else {
+            return;
+        };
+        let line = entry.to_string();
+        let written = writeln!(writer, "{line}").and_then(|()| writer.flush());
+        if let Err(error) = written {
+            self.disable(&error);
+        }
+    }
+
+    /// Disable the log after one write failure: drop the writer,
+    /// report one daemon event, and stay inert for the session's
+    /// lifetime.
+    fn disable(&mut self, error: &std::io::Error) {
+        self.writer = None;
+        self.failed = true;
+        super::log::emit(
+            "session log disabled",
+            &format!("{}: {error}", self.path.display()),
+        );
+    }
+}
+
+/// Milliseconds since the Unix epoch.
+///
+/// The wall clock is log metadata only; it never touches machine state.
+fn wall_ms() -> u64 {
+    let since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    u64::try_from(since_epoch.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// One queued job with its one-shot reply channel.
 pub(crate) struct WorkerJob {
     /// The command closure.
     pub(crate) job: SessionJob,
     /// The reply channel; the worker sends exactly one result.
     pub(crate) reply: mpsc::Sender<Result<Value, CommandError>>,
+    /// The MCP-driven call descriptor, when the caller logs the job.
+    pub(crate) logged: Option<ToolCall>,
 }
 
 /// The boot instructions for one worker thread.
@@ -279,8 +422,38 @@ fn run_worker(
         // A failed boot, or a vanished creator, registers nothing.
         return;
     }
-    while let Ok(WorkerJob { job, reply }) = queue.recv() {
+    let mut engine_log = SessionLog::new(&instruction.confined);
+    while let Ok(WorkerJob { job, reply, logged }) = queue.recv() {
+        if let Some(call) = &logged {
+            engine_log.record_request(call);
+        }
         let result = job(&mut service, &instruction.confined);
+        let tick = service.machine().map(|m| m.now().0).unwrap_or(0);
+        if let Some(call) = logged {
+            // A job result may itself carry the demu-shell protocol
+            // response (the passthrough tool), whose `ok` boolean is
+            // the truthful command outcome and whose `error` object
+            // carries the protocol code; a result without an `ok` field
+            // is a plain tool result and counts as ok. A failed job
+            // reports through the command error channel instead.
+            let (ok, error) = match &result {
+                Ok(value) => {
+                    let ok = value.get("ok").and_then(Value::as_bool).unwrap_or(true);
+                    let error = if ok {
+                        None
+                    } else {
+                        value
+                            .get("error")
+                            .and_then(|field| field.get("code"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    };
+                    (ok, error)
+                }
+                Err(error) => (false, Some(error.error_code().as_str().to_owned())),
+            };
+            engine_log.record_response(&call, ok, error.as_deref(), tick);
+        }
         // A gone caller leaves nobody to reply to; the worker keeps
         // serving the session.
         let _ = reply.send(result);
@@ -372,5 +545,105 @@ mod tests {
             SessionName::new("../etc"),
             Err(SessionNameError::Character { .. })
         ));
+    }
+
+    /// A temp directory cleared of any prior test artifact.
+    fn temp_dir(case: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("demu-daemon-session-{case}"));
+        std::fs::remove_dir_all(&path).ok();
+        path
+    }
+
+    /// The JSON objects of one written log, one per line.
+    fn log_entries(path: &std::path::Path) -> Vec<serde_json::Value> {
+        let text = std::fs::read_to_string(path).expect("the log file reads back");
+        text.lines()
+            .map(|line| serde_json::from_str(line).expect("each log line is JSON"))
+            .collect()
+    }
+
+    #[test]
+    fn the_session_log_records_request_and_response_pairs() {
+        let dir = temp_dir("log-pairs");
+        let confined = ConfinementDir::create(&dir).expect("the session dir creates");
+        let mut log = SessionLog::new(&confined);
+        let call = ToolCall::new("read_memory", serde_json::json!({"addr": "0x8000"}));
+        log.record_request(&call);
+        log.record_response(&call, true, None, 60);
+        log.record_response(&call, false, Some("bad_address"), 60);
+        drop(log);
+        let entries = log_entries(&confined.root().join("session.jsonl"));
+        assert_eq!(entries.len(), 3, "one request plus two responses");
+        assert_eq!(entries[0]["direction"], "request");
+        assert_eq!(entries[0]["tool"], "read_memory");
+        assert_eq!(entries[0]["args"], serde_json::json!({"addr": "0x8000"}));
+        assert!(
+            entries[0]["wall_ms"].as_u64().is_some(),
+            "the request logs a wall-clock field"
+        );
+        assert_eq!(entries[1]["direction"], "response");
+        assert_eq!(entries[1]["tool"], "read_memory");
+        assert_eq!(entries[1]["ok"], true);
+        assert_eq!(entries[1]["tick"], 60);
+        assert!(
+            entries[1].get("error").is_none(),
+            "the ok entry carries no error key"
+        );
+        assert_eq!(entries[2]["ok"], false);
+        assert_eq!(entries[2]["error"], "bad_address");
+        assert_eq!(entries[2]["tick"], 60);
+    }
+
+    #[test]
+    fn a_reused_session_log_appends_past_its_earlier_era() {
+        let dir = temp_dir("log-append");
+        let confined = ConfinementDir::create(&dir).expect("the session dir creates");
+        let call = ToolCall::new("run", serde_json::json!({"units": 50}));
+        let mut first = SessionLog::new(&confined);
+        first.record_request(&call);
+        first.record_response(&call, true, None, 10);
+        drop(first);
+        let log_path = confined.root().join("session.jsonl");
+        let first_era = log_entries(&log_path);
+        assert_eq!(first_era.len(), 2);
+        let mut second = SessionLog::new(&confined);
+        second.record_request(&call);
+        second.record_response(&call, true, None, 20);
+        drop(second);
+        let whole_era = log_entries(&log_path);
+        assert!(
+            whole_era.len() > first_era.len(),
+            "the second era appends after the first"
+        );
+        assert_eq!(
+            whole_era.first(),
+            first_era.first(),
+            "the earlier era's first entry survives"
+        );
+        assert_eq!(
+            whole_era[3]["tick"], 20,
+            "the era boundary shows the tick restarting"
+        );
+    }
+
+    #[test]
+    fn a_log_failure_disables_the_log_and_never_fails_a_command() {
+        let dir = temp_dir("log-failure");
+        let confined = ConfinementDir::create(&dir).expect("the session dir creates");
+        // A directory in the log's place: every open fails.
+        std::fs::create_dir(confined.root().join("session.jsonl"))
+            .expect("the log blocker creates");
+        let mut log = SessionLog::new(&confined);
+        let call = ToolCall::new("read_memory", serde_json::json!({}));
+        log.record_request(&call);
+        log.record_response(&call, true, None, 0);
+        assert!(
+            confined.root().join("session.jsonl").is_dir()
+                && !confined.root().join("session.jsonl").is_file(),
+            "the failing log writes nothing"
+        );
+        // Later records stay inert too: nothing panics, nothing changes.
+        log.record_request(&call);
+        assert!(confined.root().join("session.jsonl").is_dir());
     }
 }

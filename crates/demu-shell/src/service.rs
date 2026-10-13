@@ -16,6 +16,8 @@ use demu_core::{Tick, TriggerRegistry};
 use demu_resample::Resampler;
 use demu_symbols::{SymbolLookup, SymbolTable};
 
+use crate::protocol::ErrorCode;
+
 /// A machine factory for the media commands that rebuild a machine.
 pub type MachineFactory =
     Arc<dyn Fn(&SystemConfig) -> Result<Machine, demu_core::machine::MachineError> + Send + Sync>;
@@ -53,6 +55,23 @@ pub enum CommandError {
 impl From<EvalError> for CommandError {
     fn from(e: EvalError) -> Self {
         CommandError::BadTrigger(e.to_string())
+    }
+}
+
+impl CommandError {
+    /// The protocol error code of this failure.
+    pub fn error_code(&self) -> ErrorCode {
+        match self {
+            CommandError::BadArgs(_) => ErrorCode::BadArgs,
+            CommandError::BadAddress(_) => ErrorCode::BadAddress,
+            CommandError::BadTrigger(_) => ErrorCode::BadTrigger,
+            CommandError::BadScript(_) => ErrorCode::BadScript,
+            CommandError::Unknown("register", _) => ErrorCode::UnknownRegister,
+            CommandError::Unknown(_, _) => ErrorCode::UnknownDevice,
+            CommandError::NoMachine => ErrorCode::NoMachine,
+            CommandError::Io(_) => ErrorCode::Io,
+            CommandError::Failed(_) => ErrorCode::Failed,
+        }
     }
 }
 
@@ -927,6 +946,42 @@ fn encode_png(frame: &demu_core::Frame) -> Result<Vec<u8>, std::io::Error> {
 mod tests {
     use super::*;
     use crate::text::CommandOutputText as _;
+
+    #[test]
+    fn error_code_maps_every_command_failure() {
+        let cases = [
+            (
+                CommandError::BadArgs("bad args".to_owned()),
+                ErrorCode::BadArgs,
+            ),
+            (
+                CommandError::BadAddress("bad address".to_owned()),
+                ErrorCode::BadAddress,
+            ),
+            (
+                CommandError::BadTrigger("bad trigger".to_owned()),
+                ErrorCode::BadTrigger,
+            ),
+            (
+                CommandError::BadScript("bad script".to_owned()),
+                ErrorCode::BadScript,
+            ),
+            (
+                CommandError::Unknown("register", "r0".to_owned()),
+                ErrorCode::UnknownRegister,
+            ),
+            (
+                CommandError::Unknown("device", "cpu".to_owned()),
+                ErrorCode::UnknownDevice,
+            ),
+            (CommandError::NoMachine, ErrorCode::NoMachine),
+            (CommandError::Io("io error".to_owned()), ErrorCode::Io),
+            (CommandError::Failed("failed".to_owned()), ErrorCode::Failed),
+        ];
+        for (error, code) in cases {
+            assert_eq!(error.error_code(), code, "{error}");
+        }
+    }
 
     fn service() -> MachineService {
         let mut service = MachineService::new();

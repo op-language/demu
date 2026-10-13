@@ -231,11 +231,14 @@ directory stays on disk with its files (section 9).
 
 ## 7. The tool reference
 
-The daemon serves five MCP tools. OpenCode names every tool
+The daemon serves 16 MCP tools: the four session tools, the `command`
+passthrough, and the 11 named debug tools. OpenCode names every tool
 `<server>_<tool>`, so with the server name `demu` the tools appear as
 `demu_session_create`, `demu_session_list`, `demu_session_info`,
-`demu_session_destroy`, and `demu_command`. The subsections below name
-each tool by its MCP name and give the OpenCode surface name.
+`demu_session_destroy`, and `demu_command`, and a debug tool such as
+`run` appears as `demu_run`. The prefix rule applies to all of them.
+The subsections below name each tool by its MCP name and give the
+OpenCode surface name.
 
 ### `session_create` — OpenCode `demu_session_create`
 
@@ -383,6 +386,67 @@ and their paths:
 Every other command touches no files. A confinement violation is an
 MCP tool error, not a shell `io` error.
 
+### The named debug tools
+
+The named debug tools are the ergonomic path over some `command`
+passthrough invocations. Each tool takes the session name `name`,
+returns the same JSON data object the JSON-lines protocol returns for
+the matching shell command, and reports shell failures as tool errors
+whose text is the failure's shell message. The argument values are
+typed JSON
+(integers, strings, booleans), so the one-token-per-argument rule of
+the passthrough does not apply to them.
+
+- `run` — OpenCode `demu_run`. Optional `units` (integer). Without
+  `units` the run continues until a registered trigger fires and
+  returns `{now, start, trigger_hit}`; with `units` it runs exactly
+  that many machine units and returns `{now, start}`. WARNING: a free
+  run with no trigger set blocks the session until a trigger hits
+  (section 10).
+- `run_frame` — OpenCode `demu_run_frame`. Optional `frames` (integer,
+  default 1). Returns `{now, start, frames}` with the
+  `[start, end]` display-frame counts. A `frames` value of zero waits
+  for the first completed display frame, which may never come on a
+  machine that produces none (section 10).
+- `run_until` — OpenCode `demu_run_until`. Argument `event`, one of
+  `vblank`, `irq`, `fetch`, `read`, `write`; optional `addr` (a number
+  token; the shell's event addressing, not symbol resolution). Returns
+  `{now, start, event}`, where `event` is the fired event or `null`
+  when a registered trigger stopped the run instead. WARNING: an event
+  that never fires blocks the session (section 10).
+- `step` — OpenCode `demu_step`. Optional `units` (integer, default
+  1). Returns the same result form as `run` with `units`.
+- `read_memory` — OpenCode `demu_read_memory`. Argument `addr` (a
+  string token: a symbol name or a number such as `0xFF40`);
+  optional `count` (integer, default 16, cap 65536; a larger count is
+  rejected before the command runs). Returns `{addr, bytes}` with the
+  bytes as a hex text with one space between the bytes.
+- `write_memory` — OpenCode `demu_write_memory`. Arguments `addr` (a
+  string token) and `bytes_hex` (hex digit pairs; whitespace inside
+  the text is ignored). An empty or odd-length text is rejected before
+  the command runs. Returns `{addr, written}`.
+- `regs` — OpenCode `demu_regs`. No arguments besides the session
+  name. Returns the register map object.
+- `set_reg` — OpenCode `demu_set_reg`. Arguments `reg` (register
+  name) and `value` (an integer, or a number token such as `0xFF`).
+  Returns the text form, for example `"A = 0x42"`.
+- `break` — OpenCode `demu_break`. Argument `addr` (a string token;
+  symbol resolution applies). Sets a breakpoint and returns the text,
+  for example `"trigger 1 set"`. A registered trigger makes the next
+  free `run` stop and report `trigger_hit`.
+- `watch` — OpenCode `demu_watch`. Argument `addr` (a string token).
+  Sets a write watchpoint and returns the same trigger text form.
+  Trigger management stays with the shell: `command` with `triggers`
+  and `clear <id>`.
+- `screenshot` — OpenCode `demu_screenshot`. Only the session name.
+  Captures the composed frame as PNG into the session directory: the
+  deterministic name `screenshot-<tick>.png` carries the machine tick,
+  and a `-1`, `-2`, ... counter suffix resolves a same-tick collision.
+  The result carries an MCP image content block (base64 PNG,
+  `image/png`) plus a text object `{path, width, height, size}`. A
+  machine with no video device, and a machine whose video reports no
+  frame, fail cleanly as a tool error.
+
 ## 8. Out-of-band file placement
 
 The MCP tools carry no file upload. An input script, a save state, or
@@ -421,8 +485,22 @@ Examples, with defaults and no `output_dir` override:
 What the directory collects: `dump` images, the layer dumps
 (`dump-vram cart` writes `cart.vram` there), screenshots from
 `screenshot --png` and `--ppm`, save states, MKV inputs and MKV
-renders, and the input scripts and states the client placed out of
-band (section 8).
+renders, the input scripts and states the client placed out of band
+(section 8), and the session command log `session.jsonl` of the
+named debug tools and the `command` calls (section 7).
+
+The `session.jsonl` command log records one JSON object per logged
+command and one per response. A `request` entry carries the tool
+name, the key arguments, and a `wall_ms` wall-clock field that is
+metadata only. The response entry carries the `ok` flag, the protocol
+`error` code string for failures, and the machine `tick`. The entry
+pair of one command is consecutive. The file is append-only, so a
+reused session name keeps the earlier eras' entries, and a reader
+sees an era boundary where the tick starts again. A log write failure
+is recorded once on stderr and never fails a command. The daemon
+treats `session.jsonl` as its own log name: a confined command that
+writes a file of that name makes the daemon append later log entries
+to it, so keep the name free of confined output.
 
 The directory and its files stay on disk after the session is
 destroyed and after the daemon stops. The files are the durable
@@ -438,12 +516,19 @@ One session is one queue: the commands of one session serialize
 - A `run-until` whose event never fires runs until the machine makes
   it happen. The `run-until` caution of the [REPL and protocol
   reference](repl-reference.md) lists the no-event cases.
+- A `run-frame` with a `frames` value of zero runs until the first
+  completed display frame; on a machine that produces no display
+  frames, it parks the session.
 
 Both block the session's queue until the command returns. Other
 sessions keep answering; the blocked session answers nothing meanwhile,
 and later calls against it queue behind the running command. There is
 no interrupt: `pause` is not implemented in this build, so a started
 run cannot be stopped from the command set.
+
+The MCP tools `run` (without `units`) and `run_until` (with an
+unreachable target) carry the same block-the-queue behavior as their
+shell forms (section 7).
 
 Make bounded commands the default habit: `step <N>`, `run <N>`,
 `run-frame <N>`, and `run-until` with a target the machine actually

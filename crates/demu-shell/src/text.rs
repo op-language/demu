@@ -402,7 +402,12 @@ pub fn dispatch(
     }
 }
 
-fn hex_bytes(words: &[&str]) -> Option<Vec<u8>> {
+/// Parse the hex digits of the word tokens into bytes.
+///
+/// The tokens concatenate in order and internal whitespace drops. An
+/// odd digit count, or any digit outside `0`-`9` `a`-`f` `A`-`F`,
+/// rejects, and the result carries one byte per digit pair.
+pub fn hex_bytes(words: &[&str]) -> Option<Vec<u8>> {
     let text: String = words.concat();
     let text: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     if !text.len().is_multiple_of(2) {

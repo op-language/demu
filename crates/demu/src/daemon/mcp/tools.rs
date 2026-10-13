@@ -1,8 +1,11 @@
 //! The MCP session tools and the passthrough command of the daemon.
 //!
-//! These tools are the entire MCP tool surface: session management,
-//! lookup, and one passthrough that carries the demu-shell command set
-//! over the session worker queue.
+//! These tools cover session management, lookup, and one passthrough
+//! that carries the demu-shell command set over the session worker
+//! queue. The named debug tools complete the MCP tool surface in the
+//! debug tools module. The passthrough and the named debug tools log
+//! their calls into the session command log; the session management
+//! tools do not.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,7 +24,7 @@ use crate::daemon::{
     confinement::ConfinementDir,
     log,
     registry::Registry,
-    session::{ConfigSource, SessionError, SessionName, SessionSpec},
+    session::{ConfigSource, SessionError, SessionName, SessionSpec, ToolCall},
 };
 
 use super::DemuMcp;
@@ -39,7 +42,7 @@ impl DemuMcp {
         Self {
             registry,
             data_root,
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router() + Self::tool_router_debug(),
         }
     }
 }
@@ -106,7 +109,8 @@ pub(crate) struct SessionCreateArgs {
     pub(crate) output_dir: Option<String>,
 }
 
-/// The arguments of `session_info` and `session_destroy`.
+/// The arguments of `session_info`, `session_destroy`, and the named
+/// debug tools that take only the session name.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SessionNameArgs {
     /// The session name.
@@ -301,13 +305,15 @@ fn build_spec(
     })
 }
 
-/// Validate a user-supplied session name.
-fn session_name(raw: &str) -> Result<SessionName, ErrorData> {
+/// Validate a user-supplied session name, shared by the session tools
+/// and the debug tools.
+pub(crate) fn session_name(raw: &str) -> Result<SessionName, ErrorData> {
     SessionName::new(raw).map_err(|error| ErrorData::invalid_params(error.to_string(), None))
 }
 
-/// Render one JSON value as the text content of a successful tool call.
-fn json_result(value: Value) -> Result<CallToolResult, ErrorData> {
+/// Render one JSON value as the text content of a successful tool
+/// call, shared by the session tools and the debug tools.
+pub(crate) fn json_result(value: Value) -> Result<CallToolResult, ErrorData> {
     let text = serde_json::to_string_pretty(&value).map_err(|error| {
         ErrorData::internal_error(
             format!("the tool result failed to serialize: {error}"),
@@ -408,7 +414,7 @@ impl DemuMcp {
     }
 
     #[tool(
-        description = "Run a demu-shell command on a session: {name, cmd, args}. Each args entry must be one whitespace-free token, e.g. cmd \"read\", args [\"0x8000\"]. Path arguments of file commands (dump, screenshot, save-state, script, and so on) confine to the session output directory; files are read from there without an upload path. The result is the demu-shell protocol object {id, ok, data?, error?}. WARNING: an unbounded run, or a run-until that never fires, blocks this session until it returns; prefer bounded commands."
+        description = "Run a demu-shell command on a session: {name, cmd, args}. Each args entry must be one whitespace-free token, e.g. cmd \"read\", args [\"0x8000\"]. Path arguments of file commands (dump, screenshot, save-state, script, and so on) confine to the session output directory; files are read from there without an upload path. The result is the demu-shell protocol object {id, ok, data?, error?}. WARNING: an unbounded run, or a run-until that never fires, blocks this session until it returns; prefer bounded commands, or use the named debug tools."
     )]
     async fn command(
         &self,
@@ -417,10 +423,17 @@ impl DemuMcp {
         let name = session_name(&args.name)?;
         let cmd = args.cmd;
         let tokens = args.args;
+        // The log records the call as received; the confined tokens
+        // stay inside the worker closure.
+        let call = ToolCall::new(
+            "command",
+            serde_json::json!({"cmd": cmd.clone(), "args": tokens.clone()}),
+        );
         let registry = Arc::clone(&self.registry);
         let response = tokio::task::spawn_blocking(move || {
-            registry.submit(
+            registry.submit_logged(
                 &name,
+                call,
                 Box::new(move |service, confined| {
                     let confined_args = confine_command_args(&cmd, &tokens, confined)?;
                     let request = demu_shell::protocol::Request {
