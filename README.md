@@ -12,13 +12,30 @@
   the same result every run.
 - Machine-friendly control. A line protocol over stdio and a Unix-domain
   socket serves REPL commands for humans, opencode sessions, and LLM clients.
+- MCP daemon. `demu daemon` serves the same command set as a loopback
+  Model Context Protocol (MCP) HTTP endpoint, so OpenCode and other MCP
+  clients drive emulator sessions as tools.
 - Configuration-driven machines. A TOML system-configuration DSL constructs
   each emulated machine at startup.
 
+## Daemon mode
+
+`demu daemon` hosts emulator sessions as a Model Context Protocol (MCP)
+server on the loopback interface. Start it by hand with
+`demu daemon --http 127.0.0.1:6502`, or install it as a systemd user
+daemon with the unit in `packaging/systemd/demu.service`. An MCP client
+such as OpenCode then reaches the endpoint `http://127.0.0.1:6502/mcp`,
+creates a named session from a config and a base64 ROM image, and
+drives it with a passthrough tool for the full demu command set.
+Sessions live in the daemon process and survive client disconnects;
+they vanish with the daemon. The daemon binds loopback only, with no
+token; see `docs/manual/daemon-reference.md` for the tool reference,
+the trust model, and the install steps.
+
 ## Status
 
-The project is in early development. The workspace layout and the technical
-design exist; system support arrives in phases.
+The project is in early development. The workspace layout, the technical
+design, and the MCP daemon exist; standalone emulators have not shipped.
 
 ## License
 

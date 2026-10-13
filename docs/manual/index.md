@@ -10,6 +10,7 @@ machine-definition author constructs new machines from the DSL.
 | If you want to... | Read |
 |---|---|
 | Debug a cart with demu | the [REPL and protocol reference](repl-reference.md), then the machine chapter of your target |
+| Run demu as a daemon for OpenCode | the [daemon and MCP reference](daemon-reference.md) |
 | Understand one machine | the machine chapter (the list below) |
 | Write or check a machine definition | the [machine-definition tutorial](../machine-definitions-tutorial.md), then the [DSL specification](../dsl-specification.md) |
 | Look up a config field | the [config reference](config-reference.md) and the [DSL specification](../dsl-specification.md) |
@@ -29,6 +30,10 @@ The reference chapters:
 - [The media pipeline](media-pipeline.md) — the input script grammar,
   the replay scheduler, the Matroska forms, FFV1 video, and the audio
   resampling.
+- [The daemon and MCP reference](daemon-reference.md) — the daemon
+  execution mode, the MCP endpoint, the five session tools, the
+  passthrough command rules with path confinement, and the systemd
+  user-unit install.
 
 The machine chapters, one per system group:
 

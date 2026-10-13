@@ -25,6 +25,8 @@ struct SessionHandle {
     /// The registration number of this handle; a recreated session
     /// name always rises to a new generation.
     generation: u64,
+    /// The canonical root of the session output directory.
+    output_dir: std::path::PathBuf,
     /// The job queue sender; dropping it ends the worker.
     queue: mpsc::Sender<WorkerJob>,
     /// The worker thread; joined on destroy.
@@ -152,6 +154,7 @@ impl Registry {
                 name.clone(),
                 SessionHandle {
                     generation,
+                    output_dir: confined.root().to_path_buf(),
                     queue: queue_tx,
                     thread,
                 },
@@ -203,6 +206,18 @@ impl Registry {
     /// The machine info of one session.
     pub fn info(&self, name: &SessionName) -> Result<Value, SessionError> {
         self.submit(name, Box::new(|service, _confined| service.info()))
+    }
+
+    /// The names and output directories of every live session.
+    ///
+    /// Dead workers prune before the listing, so the result names only
+    /// sessions that can still serve commands.
+    pub fn list(&self) -> Vec<(SessionName, std::path::PathBuf)> {
+        let mut map = self.lock();
+        Self::prune(&mut map);
+        map.iter()
+            .map(|(name, handle)| (name.clone(), handle.output_dir.clone()))
+            .collect()
     }
 
     /// Send one command job to a session worker and wait for its
