@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "demu"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "base64",
@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "demu-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rustc-hash",
  "serde",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "demu-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "rustc-hash",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "demu-cpu-huc6280"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "demu-cpu-m68000"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "demu-cpu-mos6502"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "demu-cpu-mos65sc02"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "demu-cpu-sm83"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -310,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "demu-cpu-wdc65c816"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "demu-cpu-z80"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "demu-dev-audio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "demu-dev-cartridge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "demu-dev-dma"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "demu-dev-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "demu-dev-memory"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "demu-dev-serial"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "demu-dev-video"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "demu-mkv"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -402,14 +402,14 @@ dependencies = [
 
 [[package]]
 name = "demu-resample"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "demu-shell"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "demu-core",
@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "demu-symbols"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "demu-config",
  "serde",

@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The project uses the `0.y.z` scheme. Breaking changes bump `y`. Additions
 bump `z`.
 
+## [0.1.1]
+
+### Added
+
+- The daemon mode. `demu daemon [--http <addr:port>] [--session-limit <n>]
+  [--data-root <dir>]` hosts concurrent emulator sessions in one process.
+  The default cap is eight sessions, and `--session-limit` raises or
+  lowers it. Each session runs on its own worker thread and owns one
+  machine, and that machine stays single-threaded and deterministic. A
+  session is created from a name of 1 to 64 ASCII letters, digits,
+  hyphens, and underscores, a bundled config triple or TOML config text,
+  an optional base64 ROM image of at most 64 MiB, optional `.opl` symbol
+  text, and an optional output directory. The data root defaults to
+  `$XDG_DATA_HOME/demu` else `~/.local/share/demu`, and `--data-root`
+  overrides it. Sessions survive client disconnects and vanish with the
+  daemon. Every server-side file path in a command confines to the
+  session output directory. Ctrl-C (SIGINT) or SIGTERM ends the daemon
+  with exit 0, and a failed bind prints the reason and exits 2.
+- The MCP interface and tools. The daemon serves the Model Context
+  Protocol over Streamable HTTP on the loopback interface at the endpoint
+  `http://127.0.0.1:6502/mcp`. The default port honors the MOS 6502, and
+  `--http` moves it. The session tools `session_create`, `session_list`,
+  `session_info`, and `session_destroy` manage sessions by name. The
+  named debug tools `run`, `run_frame`, `run_until`, `step`,
+  `read_memory`, `write_memory`, `regs`, `set_reg`, `break`, `watch`, and
+  `screenshot` cover the hot debug loop; `screenshot` returns the PNG
+  frame as image content beside its path and frame metadata. The
+  passthrough tool `command` carries the full demu-shell command set with
+  confined paths, and OpenCode surfaces every tool name with a `demu_`
+  prefix. Each session records one request and one response JSON object
+  per logged tool call in the session command log
+  `<output-dir>/session.jsonl`.
+- The systemd user unit `packaging/systemd/demu.service`, which runs
+  `%h/.cargo/bin/demu daemon --http 127.0.0.1:6502` and restarts on
+  failure after 2 seconds. The manual documents the install: install the
+  binary with `cargo install --path crates/demu`, enable the unit with
+  `systemctl --user enable --now demu`, and keep it alive across logouts
+  with `loginctl enable-linger`. The daemon log reaches the journal with
+  `journalctl --user -u demu`.
+- The example OpenCode configuration. `docs/examples/opencode.jsonc`
+  registers the daemon as a remote MCP server with `oauth: false`, and
+  `docs/manual/daemon-reference.md` documents the CLI alternative
+  `opencode mcp add demu`, the rule that the URL matches `--http`, and
+  the `/mcps` panel check.
+- The OpenCode skill for ROM development. The repository ships
+  `.opencode/skills/demu-rom-dev/`, a skill that teaches the write, test,
+  and debug loop for a ROM over the daemon's MCP tools, and the manual
+  documents the two install paths.
+
 ## [0.1.0]
 
 ### Added
