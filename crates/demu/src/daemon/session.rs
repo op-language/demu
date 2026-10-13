@@ -97,7 +97,7 @@ impl TryFrom<String> for SessionName {
 pub enum ConfigSource {
     /// Submitted TOML configuration text.
     Toml(String),
-    /// A bundled configuration triple.
+    /// An installed or bundled configuration triple.
     Triple(String),
 }
 

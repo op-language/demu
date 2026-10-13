@@ -49,31 +49,56 @@ const MAX_REQUEST_BODY_BYTES: usize = 128 * 1024 * 1024;
 ///
 /// The default loopback host allowlist of the transport stays active:
 /// requests whose `Host` header names no loopback host fail, which
-/// stops browser-side DNS rebinding without any extra setup.
-fn http_server_config() -> StreamableHttpServerConfig {
-    StreamableHttpServerConfig::default().with_max_request_body_bytes(MAX_REQUEST_BODY_BYTES)
+/// stops browser-side DNS rebinding without any extra setup. The
+/// operator widens the allowlist with `--allow-host`: the extra names
+/// append to the loopback default, and an empty list keeps the
+/// default alone.
+fn http_server_config(allow_hosts: &[String]) -> StreamableHttpServerConfig {
+    let config =
+        StreamableHttpServerConfig::default().with_max_request_body_bytes(MAX_REQUEST_BODY_BYTES);
+    if allow_hosts.is_empty() {
+        return config;
+    }
+    config.with_allowed_hosts(
+        [
+            "localhost".to_owned(),
+            "127.0.0.1".to_owned(),
+            "::1".to_owned(),
+        ]
+        .into_iter()
+        .chain(allow_hosts.iter().cloned()),
+    )
 }
 
 /// Build the streamable HTTP service of the daemon.
+///
+/// The service keeps the loopback `Host` allowlist of the transport
+/// unless the daemon passes extra `--allow-host` names for it.
 fn build_service(
     registry: Arc<Registry>,
     data_root: PathBuf,
+    allow_hosts: Vec<String>,
 ) -> StreamableHttpService<DemuMcp, LocalSessionManager> {
     StreamableHttpService::new(
         move || Ok(DemuMcp::new(Arc::clone(&registry), data_root.clone())),
         Arc::new(LocalSessionManager::default()),
-        http_server_config(),
+        http_server_config(&allow_hosts),
     )
 }
 
 /// Serve the daemon MCP surface until a shutdown signal arrives.
+///
+/// The transport keeps its loopback `Host` allowlist; the daemon
+/// widens it only by the extra `--allow-host` names.
 pub(crate) async fn serve(
     registry: Arc<Registry>,
     http: SocketAddr,
     data_root: PathBuf,
+    allow_hosts: Vec<String>,
 ) -> Result<(), super::DaemonError> {
     let listener = tokio::net::TcpListener::bind(http).await?;
-    let router = Router::new().nest_service("/mcp", build_service(registry, data_root));
+    let router =
+        Router::new().nest_service("/mcp", build_service(registry, data_root, allow_hosts));
     log::emit("listening", &format!("http://{http}/mcp"));
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
@@ -139,12 +164,13 @@ mod tests {
     };
     use serde_json::{Value, json};
 
-    use super::build_service;
+    use super::{build_service, http_server_config};
     use crate::daemon::registry::Registry;
 
-    /// The running test server: the URL, the shutdown sender, and the
-    /// acceptor task.
+    /// The running test server: the bind address, the HTTP URL, the
+    /// shutdown sender, and the acceptor task.
     struct TestServer {
+        addr: std::net::SocketAddr,
         url: String,
         shutdown: Option<tokio::sync::oneshot::Sender<()>>,
         acceptor: tokio::task::JoinHandle<()>,
@@ -159,9 +185,14 @@ mod tests {
         }
     }
 
-    /// Spawn the daemon MCP service on an ephemeral loopback port.
-    async fn spawn_server(registry: Arc<Registry>, data_root: PathBuf) -> TestServer {
-        let service = build_service(registry, data_root);
+    /// Spawn the daemon MCP service with an explicit `Host` allowlist
+    /// on an ephemeral loopback port.
+    async fn spawn_server_with_hosts(
+        registry: Arc<Registry>,
+        data_root: PathBuf,
+        hosts: Vec<String>,
+    ) -> TestServer {
+        let service = build_service(registry, data_root, hosts);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("the test listener binds");
@@ -177,10 +208,16 @@ mod tests {
                 .await;
         });
         TestServer {
+            addr,
             url: format!("http://{addr}/mcp"),
             shutdown: Some(shutdown),
             acceptor,
         }
+    }
+
+    /// Spawn the daemon MCP service on an ephemeral loopback port.
+    async fn spawn_server(registry: Arc<Registry>, data_root: PathBuf) -> TestServer {
+        spawn_server_with_hosts(registry, data_root, Vec::new()).await
     }
 
     /// Connect one full rmcp client over the streamable HTTP transport.
@@ -1244,5 +1281,112 @@ mod tests {
         let code = crate::daemon::run(&["--http".to_owned(), format!("127.0.0.1:{port}")]);
         assert_eq!(code, std::process::ExitCode::from(2));
         drop(holder);
+    }
+
+    #[test]
+    fn the_http_config_keeps_the_loopback_hosts_and_appends_the_extra_names() {
+        let default = http_server_config(&[]);
+        assert_eq!(
+            default.allowed_hosts,
+            vec![
+                "localhost".to_owned(),
+                "127.0.0.1".to_owned(),
+                "::1".to_owned(),
+            ],
+            "an empty --allow-host list keeps the rmcp loopback default"
+        );
+        let extended = http_server_config(&["example.test".to_owned()]);
+        assert_eq!(
+            extended.allowed_hosts,
+            vec![
+                "localhost".to_owned(),
+                "127.0.0.1".to_owned(),
+                "::1".to_owned(),
+                "example.test".to_owned(),
+            ],
+            "the extra names append to the rmcp loopback default"
+        );
+    }
+
+    /// The response head of one raw GET that carries the given host
+    /// authority, read over TCP until the first CRLFCRLF.
+    fn response_head(addr: std::net::SocketAddr, host: &str) -> String {
+        use std::io::{Read as _, Write as _};
+
+        let mut stream = std::net::TcpStream::connect(addr).expect("the raw client connects");
+        stream
+            .write_all(
+                format!(
+                    "GET /mcp HTTP/1.1\r\nHost: {host}\r\nAccept: text/event-stream\r\n\
+                     Connection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .expect("the request writes");
+        let mut head = Vec::new();
+        let mut byte = [0u8];
+        while head.len() < 4096 {
+            let read = stream.read(&mut byte).expect("the head reads");
+            if read == 0 {
+                break;
+            }
+            head.push(byte[0]);
+            if head.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8(head).expect("the response head is utf-8")
+    }
+
+    /// The status line of one response head text.
+    fn status_line(head: &str) -> &str {
+        head.split("\r\n").next().unwrap_or_default()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_host_allowlist_gates_the_mcp_http_endpoint() {
+        let registry = Arc::new(Registry::new(1));
+        let server = spawn_server_with_hosts(
+            Arc::clone(&registry),
+            temp_root("host-allowlist"),
+            vec!["allowed-for-test.example".to_owned()],
+        )
+        .await;
+        let port = server.addr.port();
+
+        // A portless allowed entry matches any port: the GET passes
+        // the host gate and reaches the session handler, which
+        // reports anything but the forbidden response.
+        let allowed = response_head(server.addr, &format!("allowed-for-test.example:{port}"));
+        let allowed_status = status_line(&allowed);
+        assert!(
+            !allowed_status.contains("403"),
+            "the allowed host passes the validation: {allowed}"
+        );
+        assert!(
+            allowed_status.starts_with("HTTP/1.1 "),
+            "the response carries an HTTP status line: {allowed}"
+        );
+
+        let blocked = response_head(server.addr, &format!("blocked.example:{port}"));
+        let blocked_status = status_line(&blocked);
+        assert!(
+            blocked_status.starts_with("HTTP/1.1 403"),
+            "the unknown host hits the forbidden response: {blocked}"
+        );
+        drop(server);
+
+        let default_registry = Arc::new(Registry::new(1));
+        let default_server =
+            spawn_server(default_registry, temp_root("host-allowlist-default")).await;
+        let default_blocked = response_head(
+            default_server.addr,
+            &format!("blocked.example:{}", default_server.addr.port()),
+        );
+        let default_blocked_status = status_line(&default_blocked);
+        assert!(
+            default_blocked_status.starts_with("HTTP/1.1 403"),
+            "the default loopback list stays active without --allow-host: {default_blocked}"
+        );
     }
 }

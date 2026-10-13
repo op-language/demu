@@ -62,6 +62,13 @@ Flags:
   `$HOME/.local/share/demu` when `HOME` is an absolute path
   (section 9). A relative value falls through to the next candidate,
   per the XDG base-directory spec.
+- `--allow-host <name>[,...]` adds Host-header names beyond the
+  loopback default (section 5). The flag is repeatable, and its value
+  is one name or a comma-separated list, so
+  `--allow-host demu.example.com,10.0.0.5` admits two names. A
+  portless name matches any port. Empty results from the option error
+  out. A server deployment that serves non-loopback clients sets one
+  or more of these (section 4).
 
 Lifecycle events print on stderr: startup, shutdown, session create
 and destroy, and failures.
@@ -95,7 +102,33 @@ RestartSec=2
 WantedBy=default.target
 ```
 
-Install steps:
+The install script `packaging/install.sh` performs every step of this
+section and the skill install of section 12 in one run:
+
+```
+packaging/install.sh
+```
+
+The script's steps: it checks the binary, installs the machine
+configs into the demu config directory (the resolution of that search
+lives in section 2 of the
+[config reference](config-reference.md)), merges the
+`mcp.servers.demu` entry of the example into the global OpenCode
+configuration, copies the skills of `.opencode/skills` into the
+global skills directory, installs the unit into
+`~/.config/systemd/user/demu.service`, reloads systemd, and enables
+the service. `--keep` keeps machine configs that are already present,
+and `DEMU_MCP_URL` overrides the endpoint URL the merge records.
+
+The merge replaces only the `demu` MCP entry and keeps every other
+setting of the target file. A rewritten `.jsonc` loses its comments
+(the merge writes plain JSON, which OpenCode accepts in that file);
+the first merge keeps a `.bak` copy of the pre-merge file beside it,
+and later merges never overwrite that backup. The script targets the
+`.jsonc` file when it exists, the `.json` file when the global config
+uses the other name, and creates `.jsonc` when neither exists.
+
+The manual steps, when the script does not fit:
 
 1. Build and install the binary with
    `cargo install --path crates/demu`. The binary lands in
@@ -197,6 +230,47 @@ entirety, so an override repeats every field and points at the
 current URL. When the daemon moves to a new address, update every
 copy of the entry, since a stale URL arrives at nothing (section 11).
 
+### A server deployment
+
+The container deployment publishes the endpoint of a daemon that
+serves `0.0.0.0` inside its own network. The files `Dockerfile` and
+`docker-compose.yml` at the repository root build and run that image;
+`docker compose up -d --build` starts the stack, and the compose
+volume keeps the session output directories under a named volume
+(`/data/demu`, the container's data root).
+
+By default the compose stack publishes the MCP port to the host
+loopback only. A client on another machine reads nothing from that
+bind. To publish the port on all interfaces, set `DEMU_PUBLISH=0.0.0.0`
+in the `.env` file beside `docker-compose.yml`, and to publish on
+another host port set `DEMU_PUBLISH_PORT` (default `6502`). Then add
+the hostnames clients use to reach the daemon through
+`DEMU_EXTRA_ARGS=--allow-host demu.example.com` (one name per flag,
+comma-separated in one flag value). Without a matching `--allow-host`
+name, the server rejects the requests of non-loopback clients with
+`403 Forbidden`, because the Host header of the request names an
+unlisted host (section 5). The daemon has no authentication; section 5
+lists the trust model the operator accepts by publishing the port.
+
+The server image carries the bundled machine configs on the XDG config
+path (`/config/demu/configs`), and the session output directories live
+in a named volume. The OpenCode configuration of a client that reaches
+the server uses the server's URL:
+
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "demu": {
+        "type": "remote",
+        "url": "http://demu.example.com:6502/mcp",
+        "oauth": false
+      }
+    }
+  }
+}
+```
+
 ### Checking the connection
 
 Start the daemon (section 2 or 3), then check the client side:
@@ -255,7 +329,12 @@ that stands in for it:
   header is not one of the loopback names (`localhost`, `127.0.0.1`,
   `::1`), which is the default allowlist, so that attack class is
   stopped before any handler runs. The server library also carries an
-  origin allowlist option for stricter hardening.
+  origin allowlist option for stricter hardening. The `--allow-host`
+  option of section 2 appends names to the loopback allowlist; it
+  never removes the loopback names. A server deployment whose clients
+  use the server's hostname adds those names with it (section 4), and
+  each added name admits any request that carries it, since the daemon
+  still has no authentication.
 - Path confinement is the file-level limit. A client reads and writes
   files only under its session's output directory (section 7). The
   commands that touch no files stay unconstrained: the client can run
@@ -310,7 +389,7 @@ Arguments:
 |---|---|---|
 | `name` | yes | the session name, 1 to 64 characters of ASCII letters, digits, `-`, and `_` |
 | `config_toml` | XOR | TOML system-configuration text |
-| `config_triple` | XOR | a bundled triple, for example `sm83-nintendo-gameboy` |
+| `config_triple` | XOR | an installed or bundled triple, for example `sm83-nintendo-gameboy` |
 | `rom_base64` | no | the ROM image, base64-encoded |
 | `symbols_text` | no | the `.opl` symbol table as JSON text, version envelope 1 |
 | `output_dir` | no | an output-directory override |
@@ -627,6 +706,14 @@ including the brackets for IPv6. A URL of
 connection refused, with nothing in the daemon journal, because the
 request never arrives.
 
+**Forbidden, Host header is not allowed.** The endpoint answers
+`403 Forbidden` while the daemon runs. The request arrived, but its
+`Host` header names a host outside the allowlist: the loopback names
+plus the `--allow-host` values (section 2). A client that reaches
+`http://demu.example.com:6502/mcp` over the network needs the daemon
+to run with `--allow-host demu.example.com`, and the port must match
+the published bind.
+
 **Session cap reached.** `session_create` fails after 8 live
 sessions. A `systemctl --user restart demu` frees nothing useful:
 every session is gone after the restart and the machine states with
@@ -661,9 +748,13 @@ repository, so the prose names repository documents, such as
 
 OpenCode collects skills from the project `.opencode/skills` directory,
 from the global directory `~/.config/opencode/skills`, and from the
-`skills` array of any `opencode.json(c)`. Two install paths exist.
+`skills` array of any `opencode.json(c)`. Three install paths exist.
 
-Install path A: copy the skill directory into the global directory. Run
+Install path A: run the install script of section 3 from a checkout.
+It copies every skill directory of `.opencode/skills` into the global
+directory.
+
+Install path B: copy the skill directory into the global directory. Run
 this from a checkout of the demu repository:
 
 ```sh
@@ -673,7 +764,7 @@ cp -r .opencode/skills/demu-rom-dev ~/.config/opencode/skills/demu-rom-dev
 
 The copy in the global directory serves every project of the user.
 
-Install path B: point the `skills` array of the ROM project's
+Install path C: point the `skills` array of the ROM project's
 `opencode.json(c)` at the `skills` directory of the demu checkout:
 
 ```jsonc

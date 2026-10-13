@@ -37,10 +37,38 @@ loopback only, with no token; see `docs/manual/daemon-reference.md`
 for the tool reference, the trust model, the install steps, and the
 OpenCode connection.
 
+A bare `--config` triple resolves against the machine files installed
+in the demu config directory `$XDG_CONFIG_HOME/demu/configs` (else
+`~/.config/demu/configs`) before it falls back to the bundled copies,
+so installed configs shadow bundled ones of the same name; see
+`docs/manual/config-reference.md` for the search order. A non-loopback
+deployment adds Host-header names with `daemon --allow-host`.
+
+## Install and deployment
+
+The daemon mode section above covers the endpoints; this section
+covers the installs.
+
+`packaging/install.sh` installs everything for one user: it checks the
+`cargo install --path crates/demu` binary, installs the machine
+configs into the demu config directory, merges the MCP entry of
+`docs/examples/opencode.jsonc` and the skills of `.opencode/skills`
+into the global `~/.config/opencode` configuration, installs the user
+unit into `~/.config/systemd/user`, and enables the service.
+`loginctl enable-linger` keeps it after logout.
+
+To serve MCP clients from a server instead, `Dockerfile` and
+`docker-compose.yml` build and run the daemon image with the MCP port
+exposed; the compose defaults publish to the host loopback, and
+`DEMU_PUBLISH` (with `DEMU_PUBLISH_PORT` for the host port) and
+`DEMU_EXTRA_ARGS=--allow-host <host>` open the network path. The
+daemon reference documents both paths.
+
 The repository ships the OpenCode skill `demu-rom-dev` at
 `.opencode/skills/demu-rom-dev/`. The skill teaches the ROM write, test, and
 debug loop over the daemon's MCP tools. Install it one of two ways.
-Copy the directory to `~/.config/opencode/skills/demu-rom-dev/`. Or add
+Copy the directory to `~/.config/opencode/skills/demu-rom-dev/` (the
+install script does this). Or add
 a `skills` array entry to the ROM project's `opencode.json` that points
 at the demu checkout's `.opencode/skills` directory. The skill ID is
 distinct from the socket-based `demu-debug` skill, so the two can

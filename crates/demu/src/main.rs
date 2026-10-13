@@ -18,6 +18,7 @@ Usage:
   demu [OPTIONS] [ROM]
   demu config --check <file|triple>
   demu daemon [--http <addr:port>] [--session-limit <n>] [--data-root <dir>]
+              [--allow-host <name>[,...]]
 
 Options:
   --config <triple|file>   system configuration

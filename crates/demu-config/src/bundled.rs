@@ -3,8 +3,16 @@
 //! Canonical machine configs live in `configs/<triple>.toml` at the
 //! workspace root and are embedded with `include_str!` so that a release
 //! binary carries all bundled machines.
+//!
+//! A bare selector (a triple name with no path separators) resolves in
+//! a fixed order: first against the machine files installed under the
+//! application config directory `$XDG_CONFIG_HOME/demu/configs` (else
+//! `$HOME/.config/demu/configs`), then against the bundled copies, and
+//! finally as a file path. A selector with a path separator is a file
+//! path only, so an explicit `--config` path always names exactly one
+//! file. An installed copy shadows a bundled triple of the same name.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::ConfigError;
 use crate::raw::RawConfig;
@@ -260,16 +268,74 @@ pub const BUNDLED: &[BundledConfig] = &[
     },
 ];
 
-/// Resolve a `--config` argument: a bundled triple name or a file path.
+/// The machine-config directory of the demu application config home.
 ///
-/// The `[extends]` chain resolves against the bundled configs and files
-/// before the document returns; the caller validates the merged result.
-pub fn resolve_source(selector: &str) -> Result<RawConfig, ConfigError> {
-    let raw = load_raw(selector)?;
-    crate::extends::resolve(&raw, &load_raw)
+/// The XDG base-directory spec names `<config-home>/demu` for the app
+/// config home, and demu reads machine files from its `configs`
+/// subdirectory. `XDG_CONFIG_HOME` wins when it is set and absolute;
+/// otherwise `$HOME/.config` applies when `HOME` is set and absolute.
+/// A relative or unset value falls through to the next candidate, per
+/// the spec. `None` means demu serves bundled configs and file paths
+/// only.
+pub fn user_config_dir() -> Option<PathBuf> {
+    let configs = |key: &str| -> Option<PathBuf> {
+        let value = std::env::var_os(key)?;
+        if value.is_empty() || !Path::new(&value).is_absolute() {
+            return None;
+        }
+        Some(PathBuf::from(value).join("demu").join("configs"))
+    };
+    // The XDG spec makes a relative `XDG_CONFIG_HOME` or `HOME` unset:
+    // a relative value falls through to the next candidate instead of
+    // anchoring the directory on the process CWD.
+    configs("XDG_CONFIG_HOME").or_else(|| configs("HOME"))
 }
 
-fn load_raw(selector: &str) -> Result<RawConfig, ConfigError> {
+/// Resolve a `--config` argument: an installed or bundled triple name
+/// or a file path.
+///
+/// The `[extends]` chain resolves through the same order and files;
+/// the caller validates the merged result.
+pub fn resolve_source(selector: &str) -> Result<RawConfig, ConfigError> {
+    resolve_source_in(selector, user_config_dir().as_deref())
+}
+
+/// Resolve a selector against an explicit machine-config directory.
+///
+/// The override replaces the [`user_config_dir`] lookup (an empty dir
+/// disables it), which makes resolution deterministic for callers that
+/// own their config root and keeps the search testable without
+/// touching process environment.
+pub fn resolve_source_in(
+    selector: &str,
+    config_dir: Option<&Path>,
+) -> Result<RawConfig, ConfigError> {
+    let raw = load_raw(selector, config_dir)?;
+    crate::extends::resolve(&raw, &|key| load_raw(key, config_dir))
+}
+
+fn load_raw(selector: &str, config_dir: Option<&Path>) -> Result<RawConfig, ConfigError> {
+    // The config-directory search names a bare triple only; any
+    // separator makes the selector a file path and every lookup joins
+    // the `.toml` suffix or takes the selector as written.
+    if let Some(dir) = config_dir
+        && is_bare_name(selector)
+    {
+        let path = if selector.ends_with(".toml") {
+            dir.join(selector)
+        } else {
+            dir.join(format!("{selector}.toml"))
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => return RawConfig::parse(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(ConfigError::TomlParse {
+                    message: format!("failed to read {}: {e}", path.display()),
+                });
+            }
+        }
+    }
     if let Some(bundled) = BUNDLED.iter().find(|b| b.triple == selector) {
         return RawConfig::parse(bundled.text);
     }
@@ -286,9 +352,29 @@ fn load_raw(selector: &str) -> Result<RawConfig, ConfigError> {
     RawConfig::parse(&text)
 }
 
+/// Whether the selector names a triple instead of a file path: a
+/// non-empty text with no path separators.
+fn is_bare_name(selector: &str) -> bool {
+    !selector.is_empty() && !selector.contains('/') && !selector.contains('\\')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A config directory cleared of any prior test artifact.
+    fn temp_dir(case: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("demu-config-user-dir-{case}"));
+        std::fs::remove_dir_all(&path).ok();
+        std::fs::create_dir_all(&path).expect("the config dir creates");
+        path
+    }
+
+    /// A machine document that only the schema layer parses, with the
+    /// system triple naming its origin.
+    fn stub_config(triple: &str) -> String {
+        format!("[system]\nname = \"stub\"\ntriple = \"{triple}\"\n")
+    }
 
     #[test]
     fn smoke_config_loads() {
@@ -310,5 +396,62 @@ mod tests {
             Err(ConfigError::NotFound(_)) => {}
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_bare_selector_resolves_from_the_config_dir() {
+        let dir = temp_dir("bare");
+        std::fs::write(dir.join("user-config.toml"), stub_config("user-dir-config"))
+            .expect("write");
+        let raw = resolve_source_in("user-config", Some(&dir)).expect("resolves");
+        assert_eq!(raw.system.expect("[system]").triple, "user-dir-config");
+    }
+
+    #[test]
+    fn a_toml_suffixed_selector_resolves_from_the_config_dir() {
+        let dir = temp_dir("suffixed");
+        std::fs::write(dir.join("user-config.toml"), stub_config("user-dir-config"))
+            .expect("write");
+        // The selector as written joins without a doubled suffix.
+        let raw = resolve_source_in("user-config.toml", Some(&dir)).expect("resolves");
+        assert_eq!(raw.system.expect("[system]").triple, "user-dir-config");
+    }
+
+    #[test]
+    fn the_installed_copy_shadows_the_bundled_triple() {
+        let dir = temp_dir("shadow");
+        std::fs::write(dir.join("smoke.toml"), stub_config("shadow-test")).expect("write");
+        let raw = resolve_source_in("smoke", Some(&dir)).expect("resolves");
+        assert_eq!(raw.system.expect("[system]").triple, "shadow-test");
+        // The next selector falls back to the bundled copy.
+        let raw = resolve_source_in("smoke", None).expect("resolves");
+        assert_eq!(raw.system.expect("[system]").triple, "smoke");
+    }
+
+    #[test]
+    fn a_path_selector_skips_the_config_dir() {
+        let dir = temp_dir("path");
+        std::fs::write(dir.join("my-config.toml"), stub_config("user-dir-config")).expect("write");
+        let other = temp_dir("path-other");
+        let file = other.join("my-config.toml");
+        std::fs::write(&file, stub_config("path-config")).expect("write");
+        // A selector with a separator is a file path only.
+        let raw = resolve_source_in(&file.display().to_string(), Some(&dir)).expect("resolves");
+        assert_eq!(raw.system.expect("[system]").triple, "path-config");
+    }
+
+    #[test]
+    fn an_extends_base_resolves_from_the_config_dir() {
+        let dir = temp_dir("extends");
+        std::fs::write(dir.join("base.toml"), stub_config("base-config")).expect("write");
+        std::fs::write(
+            dir.join("child.toml"),
+            "[system]\nname = \"child\"\ntriple = \"child-config\"\n[extends]\nbase = \"base\"\n",
+        )
+        .expect("write");
+        // The child resolves by its bare name and the extends base in
+        // the chain goes through the same search; a miss would error.
+        let raw = resolve_source_in("child", Some(&dir)).expect("resolves");
+        assert_eq!(raw.system.expect("[system]").triple, "child-config");
     }
 }

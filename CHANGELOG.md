@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The project uses the `0.y.z` scheme. Breaking changes bump `y`. Additions
 bump `z`.
 
+## [Unreleased]
+
+### Added
+
+- The bare `--config` selector (and the daemon `config_triple`, and an
+  `[extends]` base) resolves against the machine files installed under
+  `$XDG_CONFIG_HOME/demu/configs` (else `~/.config/demu/configs`)
+  before the bundled copies, so an installed config shadows the bundled
+  triple of the same name, and a selector with a path separator stays
+  a file path. The search order lives in the config reference, and the
+  config crate exposes `bundled::user_config_dir` and
+  `bundled::resolve_source_in` for callers and tests that own their
+  config root.
+- The daemon option `--allow-host <name>[,...]`. The flag is
+  repeatable and comma-separated, and it appends Host-header names to
+  the loopback allowlist of the MCP Streamable HTTP transport, which a
+  server deployment whose clients reach `http://demu.example.com:6502/mcp`
+  needs. The loopback default stays in place; the option never clears
+  it.
+- The install script `packaging/install.sh`. One run checks the
+  `cargo install --path crates/demu` binary, installs the machine
+  configs of `configs/` into the demu config directory, merges the
+  `mcp.servers.demu` entry of `docs/examples/opencode.jsonc` into the
+  global OpenCode configuration (with a `.bak` backup beside the
+  rewritten file), copies every skill of `.opencode/skills` into the
+  global skills directory, installs the systemd user unit into
+  `~/.config/systemd/user`, and enables the service for the next
+  login. `--keep` preserves machine configs already present, and
+  `DEMU_MCP_URL` overrides the endpoint URL of the merge.
+- The docker files for server deployments. `Dockerfile` builds the
+  daemon in a multi-stage Rust build with cargo cache mounts and runs
+  the binary unprivileged with the machine configs on the container's
+  XDG config path; `docker-compose.yml` runs the stack with the MCP
+  port published to the host loopback by default, the session output
+  directories in a named volume, and the `DEMU_PUBLISH`,
+  `DEMU_PUBLISH_PORT`, and `DEMU_EXTRA_ARGS` variables that open the
+  network path.
+
 ## [0.1.1]
 
 ### Added

@@ -45,6 +45,7 @@ Options:
   --session-limit <n>      concurrent session cap (default: 8)
   --data-root <dir>        root of the default session output directories
                            (default: $XDG_DATA_HOME/demu else ~/.local/share/demu)
+  --allow-host <name>[,...]  extra Host-header names beyond the loopback default (repeatable)
   -h, --help               show this help
 ";
 
@@ -65,12 +66,16 @@ struct DaemonOptions {
     session_limit: usize,
     /// The session data root override.
     data_root: Option<PathBuf>,
+    /// The extra `Host`-header names the MCP HTTP transport accepts
+    /// beyond its loopback default.
+    allow_hosts: Vec<String>,
 }
 
 fn parse_options(args: &[String]) -> Result<DaemonOptions, String> {
     let mut http = DEFAULT_HTTP_SOCKET;
     let mut session_limit = DEFAULT_SESSION_LIMIT;
     let mut data_root = None;
+    let mut allow_hosts: Vec<String> = Vec::new();
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -97,6 +102,22 @@ fn parse_options(args: &[String]) -> Result<DaemonOptions, String> {
                     args.get(i).ok_or("missing value for --data-root")?,
                 ));
             }
+            "--allow-host" => {
+                i += 1;
+                let raw = args.get(i).ok_or("missing value for --allow-host")?;
+                let accepted: Vec<String> = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                if accepted.is_empty() {
+                    return Err(format!(
+                        "--allow-host expects a name or a comma-separated list, got {raw}"
+                    ));
+                }
+                allow_hosts.extend(accepted);
+            }
             "-h" | "--help" => {
                 print!("{DAEMON_USAGE}");
                 return Err(String::new());
@@ -109,6 +130,7 @@ fn parse_options(args: &[String]) -> Result<DaemonOptions, String> {
         http,
         session_limit,
         data_root,
+        allow_hosts,
     })
 }
 
@@ -178,16 +200,26 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
     log::emit(
         "starting",
         &format!(
-            "sessions<={} data-root={}",
+            "sessions<={} data-root={}{}",
             options.session_limit,
-            data_root.display()
+            data_root.display(),
+            if options.allow_hosts.is_empty() {
+                String::new()
+            } else {
+                format!(" allow-hosts={}", options.allow_hosts.join(","))
+            }
         ),
     );
     let serve = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
     {
-        Ok(runtime) => runtime.block_on(mcp::serve(registry.clone(), options.http, data_root)),
+        Ok(runtime) => runtime.block_on(mcp::serve(
+            registry.clone(),
+            options.http,
+            data_root,
+            options.allow_hosts,
+        )),
         Err(error) => Err(DaemonError::Io(error)),
     };
     let destroyed = destroy_sessions(&registry);
@@ -200,5 +232,61 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             log::emit("error", &error.to_string());
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::{DaemonOptions, parse_options};
+
+    /// Parse one daemon invocation given as short text arguments.
+    fn parse(args: &[&str]) -> Result<DaemonOptions, String> {
+        let owned: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        parse_options(&owned)
+    }
+
+    #[test]
+    fn allow_host_accumulates_across_occurrences() {
+        let options =
+            parse(&["--allow-host", "a,b", "--allow-host", "c"]).expect("the invocation parses");
+        assert_eq!(options.allow_hosts, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn allow_host_tokens_trim() {
+        let options = parse(&["--allow-host", " a , b "]).expect("the invocation parses");
+        assert_eq!(options.allow_hosts, ["a", "b"]);
+    }
+
+    #[test]
+    fn allow_host_without_a_value_errors() {
+        let Err(message) = parse(&["--allow-host"]) else {
+            panic!("the bare option fails")
+        };
+        assert!(
+            message.contains("missing value for --allow-host"),
+            "the missing value names the option: {message}"
+        );
+    }
+
+    #[test]
+    fn allow_host_without_a_usable_name_errors() {
+        let Err(message) = parse(&["--allow-host", ","]) else {
+            panic!("an empty list fails")
+        };
+        assert!(
+            message.contains("expects a name or a comma-separated list"),
+            "the empty list reports the value rule: {message}"
+        );
+    }
+
+    #[test]
+    fn default_options_keep_allow_hosts_empty() {
+        let options = parse(&[]).expect("the default invocation parses");
+        assert!(
+            options.allow_hosts.is_empty(),
+            "no flag leaves no extra hosts: {:?}",
+            options.allow_hosts
+        );
     }
 }

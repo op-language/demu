@@ -90,7 +90,8 @@ pub(crate) struct SessionCreateArgs {
     /// `config_toml` and `config_triple`.
     #[serde(default)]
     pub(crate) config_toml: Option<String>,
-    /// A bundled configuration triple such as `sm83-nintendo-gameboy`.
+    /// An installed or bundled configuration triple such as
+    /// `sm83-nintendo-gameboy`.
     /// Supply exactly one of `config_toml` and `config_triple`.
     #[serde(default)]
     pub(crate) config_triple: Option<String>,
