@@ -205,6 +205,12 @@ continue byte-identically.
   for the daemon needs `"oauth": false`.
 - Daemon down. Check `systemctl --user status demu`. Read the journal with
   `journalctl --user -u demu`.
+- Stale client refusal. The daemon runs, but `opencode mcp list` keeps
+  reporting `ConnectionRefused`. The opencode background service holds the
+  failed MCP client state of the project directory and does not re-attempt
+  it. Reconnect the client with
+  `opencode api post '/api/experimental/mcp/demu/connect?location[directory]=<project-directory>'`,
+  or restart the service with `opencode service restart`.
 - Session cap reached. `demu_session_create` fails after 8 live sessions.
   Destroy finished sessions. Reuse their names.
 - A call blocks. A free `demu_run` waits for a trigger. A `demu_run_until`

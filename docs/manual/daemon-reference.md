@@ -695,6 +695,22 @@ accept the loss, before `systemctl --user stop demu`.
 not running. Start it by hand (section 2) or check the service with
 `systemctl --user status demu`.
 
+**Refused, but the daemon listens.** A curl `initialize` POST reaches
+`http://127.0.0.1:6502/mcp` while `opencode mcp list` still reports
+`ConnectionRefused`. The dial never leaves the OpenCode background
+service: it keeps the failed MCP client state of the project
+directory from a downtime window and does not re-attempt it. Verify
+the daemon first, then reconnect that client:
+
+```sh
+opencode api get '/api/mcp?location[directory]=<project-directory>'
+opencode api post \
+  '/api/experimental/mcp/demu/connect?location[directory]=<project-directory>'
+```
+
+`opencode service restart` and reopening the OpenCode interface
+re-initialize every MCP client of every directory the same way.
+
 **Address already in use, exit 2.** Another process holds
 `127.0.0.1:6502`, the daemon prints the bind failure, and exits 2
 before serving. Find the holder with `ss -tlnp | grep 6502`, stop it,
