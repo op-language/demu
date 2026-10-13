@@ -37,6 +37,15 @@ loopback only, with no token; see `docs/manual/daemon-reference.md`
 for the tool reference, the trust model, the install steps, and the
 OpenCode connection.
 
+The repository ships the OpenCode skill `demu-rom-dev` at
+`.opencode/skills/demu-rom-dev/`. The skill teaches the ROM write, test, and
+debug loop over the daemon's MCP tools. Install it one of two ways.
+Copy the directory to `~/.config/opencode/skills/demu-rom-dev/`. Or add
+a `skills` array entry to the ROM project's `opencode.json` that points
+at the demu checkout's `.opencode/skills` directory. The skill ID is
+distinct from the socket-based `demu-debug` skill, so the two can
+coexist.
+
 ## Status
 
 The project is in early development. The workspace layout, the technical

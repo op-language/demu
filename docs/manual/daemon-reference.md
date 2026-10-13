@@ -644,3 +644,66 @@ stderr events with `journalctl --user -u demu`, and follow them with
 `journalctl --user -u demu -f`. Startup, shutdown, every session
 create and destroy, and every failure print there. A hand-started
 daemon prints the same events on its stderr.
+
+## 12. The OpenCode skill `demu-rom-dev`
+
+The repository ships the OpenCode skill `demu-rom-dev` at
+`.opencode/skills/demu-rom-dev/`. The skill teaches the ROM write, test,
+and debug loop through the MCP tools of section 7. Its steps use the
+session tools, the named debug tools, and the `command` passthrough under
+their OpenCode names.
+
+The skill is one self-contained directory. A copy of it works outside this
+repository, so the prose names repository documents, such as
+`docs/manual/repl-reference.md`, by plain path.
+
+### Installing the skill
+
+OpenCode collects skills from the project `.opencode/skills` directory,
+from the global directory `~/.config/opencode/skills`, and from the
+`skills` array of any `opencode.json(c)`. Two install paths exist.
+
+Install path A: copy the skill directory into the global directory. Run
+this from a checkout of the demu repository:
+
+```sh
+mkdir -p ~/.config/opencode/skills
+cp -r .opencode/skills/demu-rom-dev ~/.config/opencode/skills/demu-rom-dev
+```
+
+The copy in the global directory serves every project of the user.
+
+Install path B: point the `skills` array of the ROM project's
+`opencode.json(c)` at the `skills` directory of the demu checkout:
+
+```jsonc
+{
+  // Substitute the checkout location on this machine.
+  "$schema": "https://opencode.ai/config.json",
+  "skills": [
+    "/home/alice/src/demu/.opencode/skills"
+  ]
+}
+```
+
+An entry is a directory that contains skill directories. Point it at
+`.opencode/skills` of the checkout, not at the `SKILL.md` file. An absolute
+entry applies as written. An entry that starts with `~/` resolves from the
+user home. A relative entry resolves from the active OpenCode working
+directory, not from the config file.
+
+### The skill ID and loading
+
+The directory name under `.opencode/skills` derives the skill ID. The ID
+here is `demu-rom-dev`. IDs are exact and case-sensitive. The frontmatter
+`name` field of the file is a display label only. Load the skill with the
+exact ID. Write `@demu-rom-dev` in a prompt. Or call the `skill` tool with
+that ID.
+
+### Coexistence with the socket skill
+
+The `demu-debug` skill is the socket-based skill of this emulator. It
+drives the JSON-lines protocol over a Unix-domain socket. The ID
+`demu-rom-dev` is distinct from the ID `demu-debug`. Distinct IDs coexist
+without a precedence conflict. A user with both installed sees both
+advertised, and the agent selects between them per description.
