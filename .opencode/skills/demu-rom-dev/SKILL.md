@@ -16,9 +16,12 @@ tools of the configured `demu` server. This skill teaches the loop:
 4. Rebuild the ROM after each source change.
 5. Repeat from step 2.
 
-The complete tool reference is section 7 of `docs/manual/daemon-reference.md`
-in the demu repository. The command syntax reference is
-`docs/manual/repl-reference.md`.
+The complete tool reference is section 7 of the daemon reference at
+`~/.config/demu/docs/manual/daemon-reference.md`, which the install
+script `packaging/install.sh` ships; in a demu repository checkout, the
+same file is `docs/manual/daemon-reference.md`. The command syntax
+reference is `~/.config/demu/docs/manual/repl-reference.md`
+(`docs/manual/repl-reference.md` in a checkout).
 
 ## Prerequisites
 
