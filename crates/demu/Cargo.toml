@@ -31,3 +31,5 @@ demu-dev-io = { version = "0.1.0", path = "../demu-dev-io" }
 demu-dev-serial = { version = "0.1.0", path = "../demu-dev-serial" }
 demu-dev-dma = { version = "0.1.0", path = "../demu-dev-dma" }
 png = "0.18.1"
+serde_json = "1.0.151"
+thiserror = "2.0.20"

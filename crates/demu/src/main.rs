@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod assemble;
+mod daemon;
 
 use demu_shell::service::MachineService;
 use demu_shell::{json, socket, text};
