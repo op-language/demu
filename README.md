@@ -27,10 +27,15 @@ daemon with the unit in `packaging/systemd/demu.service`. An MCP client
 such as OpenCode then reaches the endpoint `http://127.0.0.1:6502/mcp`,
 creates a named session from a config and a base64 ROM image, and
 drives it with a passthrough tool for the full demu command set.
-Sessions live in the daemon process and survive client disconnects;
-they vanish with the daemon. The daemon binds loopback only, with no
-token; see `docs/manual/daemon-reference.md` for the tool reference,
-the trust model, and the install steps.
+To connect OpenCode, copy `docs/examples/opencode.jsonc` into the
+OpenCode configuration, or run
+`opencode mcp add demu --global --url http://127.0.0.1:6502/mcp` and
+set `"oauth": false` in the written entry; the URL must match the
+`--http` bind. Sessions live in the daemon process and survive
+client disconnects; they vanish with the daemon. The daemon binds
+loopback only, with no token; see `docs/manual/daemon-reference.md`
+for the tool reference, the trust model, the install steps, and the
+OpenCode connection.
 
 ## Status
 

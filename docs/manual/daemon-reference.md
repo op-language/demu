@@ -144,9 +144,19 @@ started with `--http 127.0.0.1:7700` serves
 `http://127.0.0.1:7700/mcp`. Point the client at the URL the daemon
 actually binds (section 11).
 
-OpenCode connects as a remote MCP server. Add the entry by hand to the
-OpenCode configuration, global at `~/.config/opencode/opencode.jsonc`
-or project-local at `opencode.jsonc`:
+OpenCode connects to this endpoint as a remote MCP server. The
+connection is one `mcp.servers.demu` entry in the OpenCode
+configuration, and the daemon's tools then appear under the OpenCode
+names of their own subsection below.
+
+### Connecting OpenCode
+
+The `mcp.servers.demu` entry lives in the OpenCode configuration: the
+global `~/.config/opencode/opencode.jsonc` makes the server available
+in every project, and a project-local `opencode.jsonc` (or
+`.opencode/opencode.jsonc`) keeps it in one project. The repository
+ships the copy-ready example `docs/examples/opencode.jsonc`; its
+entry is:
 
 ```jsonc
 {
@@ -163,15 +173,67 @@ or project-local at `opencode.jsonc`:
 }
 ```
 
-`"oauth": false` matters: the daemon serves no OAuth metadata, so
-OpenCode must not start its OAuth discovery flow. The CLI alternative
-`opencode mcp add demu --url http://127.0.0.1:6502/mcp` writes the
-entry too; then set `"oauth": false` in the written entry. Check the
-connection with `opencode mcp list`.
+The command line writes the same entry, into the global
+configuration with `--global` or into the project-local one without:
 
-The server name is the tool prefix. OpenCode surfaces the MCP tool
-`session_create` as `demu_session_create`, and the same for the rest
-(section 7).
+```
+opencode mcp add demu --global --url http://127.0.0.1:6502/mcp
+```
+
+OpenCode enables OAuth for remote servers by default, so an entry
+that `opencode mcp add` writes needs one edit: set `"oauth": false`.
+The daemon serves no OAuth metadata, so there is nothing to sign in
+to (section 5).
+
+The protocol needs no setting either. OpenCode negotiates the classic
+MCP protocol by default (the `protocol` field of a server defaults to
+`legacy`, the classic `initialize` handshake), which is what the
+daemon's server library serves; the entry above connects as written.
+
+Two address rules keep the connection alive when entries multiply. A
+project-local `opencode.json(c)` whose `mcp.servers.demu` entry
+replaces the inherited global entry for the name `demu` in its
+entirety, so an override repeats every field and points at the
+current URL. When the daemon moves to a new address, update every
+copy of the entry, since a stale URL arrives at nothing (section 11).
+
+### Checking the connection
+
+Start the daemon (section 2 or 3), then check the client side:
+
+- `opencode mcp list` prints each configured server with its state. A
+  working configuration shows:
+
+  ```text
+  ✓ demu  connected
+  ```
+
+- The `/mcps` panel of the OpenCode interface lists the server and
+  offers connect, disconnect, and sign-in controls. A demu server
+  never has a sign-in; if `opencode mcp list` reports `needs
+  authentication` for it, the entry is missing `"oauth": false`.
+- The tool list of an agent session is the final check. The 16 tools
+  of section 7 arrive under the names of the next subsection.
+
+### The OpenCode tool names
+
+OpenCode names every MCP tool `<server>_<tool>`, replacing the
+characters other than ASCII letters, digits, `_`, and `-` with `_`.
+With the server name `demu`, the 16 tools of section 7 surface as:
+
+```text
+demu_session_create    demu_run            demu_regs
+demu_session_list      demu_run_frame      demu_set_reg
+demu_session_info      demu_run_until      demu_break
+demu_session_destroy   demu_step           demu_watch
+demu_command           demu_read_memory    demu_screenshot
+                       demu_write_memory
+```
+
+Under OpenCode's default Code Mode, the agent reaches the same tools
+through the `tools.demu.<tool>` group, with `<tool>` the tool name
+without the `demu_` prefix (`tools.demu.session_create`). The
+per-tool argument reference stays section 7.
 
 ## 5. The trust model
 
