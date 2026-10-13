@@ -11,8 +11,8 @@
 //! - [`extends::resolve`] — resolve an extends chain.
 //! - [`validate::validate`] — run all layers and produce the resolved
 //!   config.
-//! - [`bundled::resolve_source`] — resolve a `--config` selector (triple
-//!   name or file path).
+//! - [`bundled::resolve_source`] — resolve a `--config` selector (an
+//!   installed or a bundled triple name, or a file path).
 //! - [`registry::core_registry`] — the kind registry contract.
 //!
 //! A `SystemConfig` value exists only when every layer accepted the

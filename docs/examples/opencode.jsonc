@@ -1,0 +1,24 @@
+// Example OpenCode configuration for the demu daemon.
+//
+// Copy this file into a project as `opencode.jsonc` (or
+// `.opencode/opencode.jsonc`), or merge the `mcp` object into the
+// global `~/.config/opencode/opencode.jsonc`. The URL must match the
+// address `demu daemon --http` sets; the value below is the default
+// endpoint `http://127.0.0.1:6502/mcp`.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "demu": {
+        // The MCP Streamable HTTP endpoint of the daemon, on the
+        // loopback interface with the endpoint path /mcp.
+        "type": "remote",
+        "url": "http://127.0.0.1:6502/mcp",
+        // OAuth is off: the daemon serves no OAuth metadata, so there
+        // is no sign-in. OpenCode enables OAuth for remote servers by
+        // default, so leave this setting in place.
+        "oauth": false
+      }
+    }
+  }
+}

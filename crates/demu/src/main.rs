@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod assemble;
+mod daemon;
 
 use demu_shell::service::MachineService;
 use demu_shell::{json, socket, text};
@@ -16,6 +17,8 @@ demu - a cycle-accurate debugging emulator
 Usage:
   demu [OPTIONS] [ROM]
   demu config --check <file|triple>
+  demu daemon [--http <addr:port>] [--session-limit <n>] [--data-root <dir>]
+              [--allow-host <name>[,...]]
 
 Options:
   --config <triple|file>   system configuration
@@ -127,9 +130,36 @@ fn parse_sentinel(raw: &str) -> Result<(u32, u8), String> {
     ))
 }
 
+/// One CLI routing decision.
+enum Route<'a> {
+    /// The daemon subcommand: it parses its own options.
+    Daemon(&'a [String]),
+    /// The generic parser handles the rest.
+    Session(&'a [String]),
+}
+
+/// Route the `daemon` subcommand before the generic parser, so the
+/// daemon options (`--http`, `--session-limit`, `--data-root`) never
+/// reach the ROM parser.
+fn route(args: &[String]) -> Route<'_> {
+    if args.first().map(String::as_str) == Some("daemon") {
+        Route::Daemon(&args[1..])
+    } else {
+        Route::Session(args)
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let cli = match parse_args(&args) {
+    match route(&args) {
+        Route::Daemon(rest) => daemon::run(rest),
+        Route::Session(all) => run_mode(all),
+    }
+}
+
+/// The generic CLI mode: `config --check` or the one-machine session.
+fn run_mode(args: &[String]) -> ExitCode {
+    let cli = match parse_args(args) {
         Ok(cli) => cli,
         Err(message) => {
             if message.is_empty() {
@@ -333,6 +363,41 @@ fn finish_session(service: &MachineService) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn the_daemon_subcommand_routes_to_the_daemon_parser() {
+        assert!(matches!(
+            route(&[
+                "daemon".to_owned(),
+                "--http".to_owned(),
+                "127.0.0.1:6502".to_owned()
+            ]),
+            Route::Daemon(_)
+        ));
+        assert!(matches!(route(&["boot.rom".to_owned()]), Route::Session(_)));
+    }
+
+    #[test]
+    fn the_daemon_options_reach_the_daemon_parser() {
+        // Through the dispatch: the daemon parser owns `--session-limit`
+        // and rejects a zero cap with exit 2, so the option arrived
+        // instead of dying in the generic parser as an unexpected
+        // argument.
+        let code = match route(&[
+            "daemon".to_owned(),
+            "--session-limit".to_owned(),
+            "0".to_owned(),
+        ]) {
+            Route::Daemon(rest) => daemon::run(rest),
+            Route::Session(_) => panic!("the daemon subcommand must route to the daemon"),
+        };
+        assert_eq!(code, ExitCode::from(2));
+    }
 }
 
 #[cfg(test)]

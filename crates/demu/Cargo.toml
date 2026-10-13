@@ -11,6 +11,8 @@ name = "demu"
 path = "src/main.rs"
 
 [dependencies]
+axum = "0.8.9"
+base64 = "0.23.1"
 demu-config = { version = "0.1.0", path = "../demu-config" }
 demu-core = { version = "0.1.0", path = "../demu-core" }
 demu-shell = { version = "0.1.0", path = "../demu-shell" }
@@ -31,3 +33,17 @@ demu-dev-io = { version = "0.1.0", path = "../demu-dev-io" }
 demu-dev-serial = { version = "0.1.0", path = "../demu-dev-serial" }
 demu-dev-dma = { version = "0.1.0", path = "../demu-dev-dma" }
 png = "0.18.1"
+rmcp = { version = "3.5.1", features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-streamable-http-server",
+    "transport-streamable-http-server-session",
+] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+
+[dev-dependencies]
+rmcp = { version = "3.5.1", features = ["client", "transport-streamable-http-client-reqwest"] }

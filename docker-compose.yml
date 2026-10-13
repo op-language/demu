@@ -1,0 +1,44 @@
+# The demu daemon as a docker compose stack.
+#
+# The daemon inside the container listens on 0.0.0.0:6502 so the
+# published port reaches it; docker compose publishes the port to the
+# host loopback by default, which keeps the network-facing exposure
+# closed until the operator opens it. The MCP endpoint is
+# http://<host>:6502/mcp.
+#
+# Deploy on a server with the MCP port exposed beyond the host:
+#   1. Put the settings in the .env file next to this file:
+#        DEMU_PUBLISH=0.0.0.0
+#        DEMU_PUBLISH_PORT=6502
+#        DEMU_EXTRA_ARGS=--allow-host demu.example.com
+#      --allow-host names the hostnames clients use in the URL; the
+#      daemon keeps its loopback default and adds each one to it.
+#   2. docker compose up -d --build
+#
+# The local loopback default needs no extra settings:
+#   docker compose up -d --build
+#
+# The session output directories live in the named volume under
+# /data/demu. To replace the image's machine configs, bind-mount
+# ./configs over /config/demu/configs.
+
+services:
+  demu:
+    build: .
+    image: demu-daemon:latest
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      # Set DEMU_PUBLISH (see above) to expose the port beyond the host
+      # loopback; the default keeps it local. Set DEMU_PUBLISH_PORT to
+      # publish on another host port.
+      - "${DEMU_PUBLISH:-127.0.0.1}:${DEMU_PUBLISH_PORT:-6502}:6502"
+    volumes:
+      - demu-data:/data
+    # The extra daemon arguments, for example:
+    #   DEMU_EXTRA_ARGS=--allow-host demu.example.com --session-limit 16
+    command: daemon --http 0.0.0.0:6502 ${DEMU_EXTRA_ARGS:-}
+
+volumes:
+  demu-data:

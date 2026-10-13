@@ -463,16 +463,23 @@ demu - a cycle-accurate debugging emulator
 Usage:
   demu [OPTIONS] [ROM]
   demu config --check <file|triple>
+  demu daemon [--http <addr:port>] [--session-limit <n>] [--data-root <dir>]
 
 Options:
   --config <triple|file>   system configuration
   --symbols <file.opl>     symbol table
   --dump <path>            memory dump at exit
-  --sentinel <addr>:<val>  compare byte, set exit code
+  --sentinel <addr>:<val>  compare byte at exit, set the exit code
   --json                   JSON-lines protocol on stdio
-  --serve <path>           Unix-socket server mode
+  --serve <path>           Unix-domain-socket server mode
   -h, --help               show this help
 ```
+
+`demu daemon --help` prints the daemon options: `--http <addr:port>`
+(bind address, default `127.0.0.1:6502`), `--session-limit <n>`
+(concurrent-session cap, default `8`), and `--data-root <dir>` (the root
+of the default session output directories, default
+`$XDG_DATA_HOME/demu` else `~/.local/share/demu`).
 
 The `--config` default selector is `smoke`; the session needs a real
 triple, because the demo binary registers no `smoke.*` constructors.
@@ -482,6 +489,10 @@ Exit codes:
 - `0` — success, or sentinel pass.
 - `1` — sentinel miss only.
 - `2` — usage error, configuration error, or I/O error.
+
+Daemon mode ends with exit `2` on an option error or a bind failure,
+including an address already in use. SIGTERM and SIGINT end the daemon
+with exit `0`. Exit `1` does not occur in daemon mode.
 
 The `--checks <file>` flag and its TOML schema are not implemented in
 this build; the checks file is a follow-up.
@@ -554,7 +565,10 @@ cargo test --workspace
 cargo build --workspace
 ```
 
-Documentation work adds `cargo doc --no-deps`.
+Documentation work adds `cargo doc --no-deps`. A host with systemd can
+also check the shipped user unit with `systemd-analyze verify
+packaging/systemd/demu.service`.
+
 ## 19. As-built notes: NES
 
 The NES machines of the 6502 family implement this design. The notes
@@ -1548,3 +1562,72 @@ checks file, and the current demu build rejects the flag with exit 2.
   the `lynx.cart` and `pce.cart` kinds yet, so `cart debug` with those
   triples reports `the configuration declares no cartridge device`. The
   fix lives on the demu side with the follow-up evidence pass.
+
+## 28. As-built notes: daemon and MCP
+
+The `daemon` subcommand hosts emulator sessions for an MCP client. One
+registry owns every live session and enforces the concurrent-session
+cap (default 8; `--session-limit <n>` overrides, `0` rejected) and the
+session-name rules (1 to 64 ASCII letters, digits, hyphens, and
+underscores, because the name doubles as the last component of the
+session output directory). One worker thread services each session, so
+the commands of one session serialize while other sessions run beside
+it. The default output directory of a session is `<data-root>/<name>`,
+with the data root from the `--data-root` override, else
+`$XDG_DATA_HOME/demu`, else `$HOME/.local/share/demu`; relative values
+of the two environment variables are skipped, per the XDG
+base-directory spec.
+
+The MCP transport is the rmcp Streamable HTTP server on axum and
+tokio, bound to the loopback address (default `127.0.0.1:6502`,
+overridden by `--http <addr:port>`, IPv6 in brackets) at the endpoint
+path `/mcp`. The server rejects requests whose `Host` header is
+outside the default loopback allowlist (`localhost`, `127.0.0.1`,
+`::1`), which closes the ordinary DNS-rebinding attack against the
+local port; an origin allowlist option exists for stricter hardening.
+The transport caps one MCP request body at 128 MiB so a 64 MiB decoded
+ROM (about 85 MiB of base64) plus symbol text stays possible; the
+rmcp default is 4 MiB. There is no token authentication; the loopback
+bind is the trust decision.
+
+Five MCP tools serve the registry, and OpenCode surfaces them with the
+`demu_` server-name prefix: `demu_session_create` (`name`, the XOR of
+`config_toml` and `config_triple`, optional `rom_base64`,
+`symbols_text`, and `output_dir`; creation assembles and boots, admits
+a decoded ROM of at most 64 MiB, and returns the config lint warnings
+with the output directory), `demu_session_list`,
+`demu_session_info`, `demu_session_destroy` (double destroy is a clean
+`no session named ...` tool error), and `demu_command`. The
+`demu_command` tool passes the demu-shell command set through and
+answers with the JSON-lines protocol response object (`id` always
+`null`).
+
+The passthrough confines every path argument of the file-touching
+commands to the session output directory; the client places input
+scripts, save states, and MKV input files out of band with its own
+file tools, then the commands name them:
+
+| Command | Confined path arguments |
+|---|---|
+| `dump` | the third token |
+| `dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-framebuffer` | the first token; demu appends the layer suffix after confinement |
+| `screenshot` | the first non-flag token (`--png`, `--ppm` are flags) |
+| `save-state`, `load-state`, `script`, `symbols` | the first token |
+| `mkv-input`, `mkv-render` | the first token and the value after `-o` |
+| `render-session` | the value after `-o` |
+
+Paths join under the session directory; `..` segments and absolute
+paths outside the directory are rejected as MCP tool errors, beside
+the unknown-session and whitespace-bearing-argument cases. Every
+argument string must be one whitespace-free token; the shell parser
+re-splits the command line on whitespace.
+
+The daemon bridges the async MCP calls to the blocking session queues
+with `spawn_blocking`, so an unbounded run or a never-firing
+`run-until` holds only that one session's worker while the tokio
+runtime stays responsive. The `daemon` mode adds the MCP transport and
+touches nothing else: the classic transports (`--json`, `--serve`, the
+text REPL, and `config --check`) keep their behavior and exit codes,
+and daemon mode never exits 1. The user unit
+`packaging/systemd/demu.service` installs the daemon as a systemd user
+service with `Restart=on-failure` and `RestartSec=2`.

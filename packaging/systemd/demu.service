@@ -1,0 +1,10 @@
+[Unit]
+Description=demu cycle-accurate emulator daemon
+
+[Service]
+ExecStart=%h/.cargo/bin/demu daemon --http 127.0.0.1:6502
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

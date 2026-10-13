@@ -7,23 +7,8 @@
 use std::io::{BufRead, Write};
 
 use crate::protocol::{self, ErrorCode, Request, Response};
-use crate::service::{CommandError, MachineService};
+use crate::service::MachineService;
 use crate::text::dispatch;
-
-/// Map a command error to a protocol error code.
-fn code_of(e: &CommandError) -> ErrorCode {
-    match e {
-        CommandError::BadArgs(_) => ErrorCode::BadArgs,
-        CommandError::BadAddress(_) => ErrorCode::BadAddress,
-        CommandError::BadTrigger(_) => ErrorCode::BadTrigger,
-        CommandError::BadScript(_) => ErrorCode::BadScript,
-        CommandError::Unknown("register", _) => ErrorCode::UnknownRegister,
-        CommandError::Unknown(_, _) => ErrorCode::UnknownDevice,
-        CommandError::NoMachine => ErrorCode::NoMachine,
-        CommandError::Io(_) => ErrorCode::Io,
-        CommandError::Failed(_) => ErrorCode::Failed,
-    }
-}
 
 /// The argument text for the dispatcher: a JSON string is passed as-is, a
 /// scalar is rendered bare, and an array joins its stringifiable items
@@ -57,7 +42,7 @@ pub fn handle(service: &mut MachineService, req: &Request) -> Response {
         Ok(out) => match out {
             crate::service::CommandOutput::Text { json, .. } => protocol::ok(id, json),
         },
-        Err(e) => protocol::err(id, code_of(&e), e.to_string()),
+        Err(e) => protocol::err(id, e.error_code(), e.to_string()),
     }
 }
 

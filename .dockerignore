@@ -1,0 +1,16 @@
+# The docker build context: only the sources the image build reads. The
+# workspace target/ directory stays out of the context and the build runs
+# inside the container with its own cache mounts.
+.git
+.gitignore
+.github
+.opencode
+docs
+packaging
+target
+CHANGELOG.md
+Dockerfile
+LICENSE
+README.md
+rustfmt.toml
+docker-compose.yml

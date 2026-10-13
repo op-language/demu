@@ -17,6 +17,30 @@ demu --config sm83-nintendo-gameboy          # a bundled triple
 demu --config /home/you/my-machine.toml      # a file
 ```
 
+A bare triple name (a selector with no path separator) resolves in
+this order:
+
+1. The machine files installed under the demu config directory
+   `$XDG_CONFIG_HOME/demu/configs` (else `~/.config/demu/configs`):
+   the selector joins `.toml` when it lacks the suffix, so
+   `my-machine` names `my-machine.toml` there.
+2. The bundled copies embedded in the binary.
+3. A file path, relative or absolute.
+
+So an installed copy shadows a bundled triple of the same name, and a
+selector with a separator is always a file path. The `[extends]` base
+of a config follows the same order. `packaging/install.sh` installs
+the bundled configs of the repository into the config directory, and
+running it again refreshes those copies (`--keep` preserves local
+edits). To customize a machine, install a copy under a new triple name
+and edit the copy, so a refresh keeps it:
+
+```
+cp ~/.config/demu/configs/sm83-nintendo-gameboy.toml \
+   ~/.config/demu/configs/my-gameboy.toml     # edit the copy
+demu --config my-gameboy
+```
+
 The bundled triples:
 
 | Config file | Triple | Machine group |
