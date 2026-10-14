@@ -78,6 +78,13 @@ pub trait VideoSource {
     fn frames(&self) -> u64;
 }
 
+/// A device carries a pattern table: the tile graphics a mapper
+/// switches, for example cartridge CHR memory.
+pub trait PatternSource {
+    /// The pattern-table bytes, when the device carries them.
+    fn pattern_table(&self) -> Option<&[u8]>;
+}
+
 /// A CPU exposes its registers for debug commands.
 pub trait CpuDebug {
     /// The register values by name.
@@ -124,6 +131,12 @@ pub trait Device {
 
     /// The device as a video source, when it produces a display.
     fn video(&self) -> Option<&dyn VideoSource> {
+        None
+    }
+
+    /// The device as a pattern-table source, when it carries CHR
+    /// memory.
+    fn pattern(&self) -> Option<&dyn PatternSource> {
         None
     }
 

@@ -283,6 +283,17 @@ demu> read 0x0100
 0100: C3 00 00 00 CE ED 66 66 CC 0D 00 0B 03 73 00 83
 ```
 
+The read goes through the CPU (primary) bus only. The JSON data adds
+`window` beside `addr` and `bytes`. `window` is the name of the bus
+window that answered the first byte of the read, or `null` when no
+window answers.
+
+On the NES the bus does not expose the palette RAM. A read at `$3F00`
+routes through the `w_ppu_regs` mirror window and answers the 2C02
+debug peek for write-only registers. That answer is deterministic, and
+it is not palette data. The truthful background-palette read is
+`dump-palette`, which dumps the 2C02 palette RAM (32 bytes) to a file.
+
 ### `read-n <addr> <n>`
 
 Peeks `n` bytes at the address. Same output form as `read`.
@@ -313,6 +324,9 @@ Peeks `n` bytes and writes them to a file.
 demu> dump 0x0000 32 /tmp/dump.bin
 dumped 32 bytes at 0000 to /tmp/dump.bin
 ```
+
+The peeks go through the CPU (primary) bus. The JSON data carries the
+same `window` field as `read`.
 
 ### `fill <addr> <n> <byte>`
 
@@ -401,8 +415,8 @@ wrote /tmp/frame.png (160x144)
 
 ### Layer dumps
 
-`dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, and
-`dump-framebuffer` write one raw layer each. demu appends the layer
+`dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-pattern`,
+and `dump-framebuffer` write one raw layer each. demu appends the layer
 name to the path you give, so `dump-vram /tmp/gb` writes
 `/tmp/gb.vram`. The layer byte layout is per device family. The machine chapter
 names it.
@@ -410,6 +424,17 @@ names it.
 ```
 demu> dump-vram /tmp/gb
 dumped vram to /tmp/gb.vram
+```
+
+`dump-pattern` dumps the cartridge CHR store (the pattern-table bytes).
+demu appends `.pattern`, so `dump-pattern /tmp/chr` writes
+`/tmp/chr.pattern`. On the NES machines the cartridge CHR is the
+pattern table. The PPU carries no pattern-table layer of its own, so
+`dump-pattern` is the CHR dump of the family.
+
+```
+demu> dump-pattern /tmp/chr
+dumped 8192 pattern bytes to /tmp/chr.pattern
 ```
 
 ## 9. State commands
@@ -591,7 +616,7 @@ plain text of the rest. The table completes the per-command JSON
 | `info`, `status` | the machine summary object |
 | `regs` | the register name to number object |
 | `set-reg` | the plain string, for example `A = 0x7f` |
-| `read`, `read-n` | `{"addr": "0x...", "bytes": "..."}` |
+| `read`, `read-n` | `{"addr": "0x...", "bytes": "...", "window": "<name or null>"}` |
 | `write`, `fill` | `{"addr": "0x...", "written": <n>}` |
 | `run`, `step` | `{"now": <n>, "start": <n>}` |
 | free `run` | `{"now", "start", "trigger_hit": <bool>}` |
@@ -600,9 +625,10 @@ plain text of the rest. The table completes the per-command JSON
 | `break`, `watch` | the plain string `trigger <id> set` |
 | `triggers` | the listing as a plain string |
 | `clear` | `cleared` or `no such trigger` as a plain string |
-| `dump` | `{"addr": "0x...", "written": <n>}` |
+| `dump` | `{"addr": "0x...", "written": <n>, "window": "<name or null>"}` |
 | `screenshot` | `{"path", "width", "height", "format"}` |
 | layer dumps | the plain string `dumped <layer> to <file>` |
+| `dump-pattern` | `{"path": "<file>", "bytes": <n>}` and the text `dumped <n> pattern bytes to <file>` |
 | `save-state`, `load-state` | the plain string `saved to <path>` or `loaded from <path>` |
 | `symbols` | the plain string `loaded <n> symbols` |
 | `sym` | the plain string `<name> = <addr> (<kind> <section>)` |

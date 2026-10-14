@@ -377,14 +377,21 @@ impl WorkerInstruction {
 /// Resolve a session configuration source to its raw form and its
 /// text.
 ///
-/// A submitted TOML text parses as-is and applies verbatim as the
-/// session's media tag; a bundled triple resolves to the bundled text
-/// form.
+/// A submitted TOML text parses as-is; its `[extends]` chain resolves
+/// through the same bundled and user-config lookup the CLI uses, and
+/// the submitted text stays the session's media tag; a bundled triple
+/// resolves to the bundled text form.
 pub(crate) fn resolve_source(
     source: &ConfigSource,
 ) -> Result<(demu_config::RawConfig, String), SessionError> {
     match source {
-        ConfigSource::Toml(text) => Ok((demu_config::RawConfig::parse(text)?, text.clone())),
+        ConfigSource::Toml(text) => {
+            let raw = demu_config::RawConfig::parse(text)?;
+            let raw = demu_config::extends::resolve(&raw, &|key| {
+                demu_config::bundled::resolve_source(key)
+            })?;
+            Ok((raw, text.clone()))
+        }
         ConfigSource::Triple(triple) => {
             let raw = demu_config::bundled::resolve_source(triple)?;
             let text = raw.to_toml_text()?;
@@ -645,5 +652,51 @@ mod tests {
         // Later records stay inert too: nothing panics, nothing changes.
         log.record_request(&call);
         assert!(confined.root().join("session.jsonl").is_dir());
+    }
+
+    #[test]
+    fn a_submitted_toml_resolves_its_extends_chain() {
+        let child = concat!(
+            "[system]\n",
+            "name = \"Nintendo NES (NTSC, plain 6502)\"\n",
+            "triple = \"mos6502-nintendo-nes-ntsc\"\n",
+            "description = \"the extends probe\"\n",
+            "\n",
+            "[extends]\n",
+            "base = \"rp2A03-nintendo-nes-ntsc\"\n",
+            "\n",
+            "[[device]]\n",
+            "name = \"cpu0\"\n",
+            "kind = \"mos6502.cpu\"\n",
+            "domain = \"main\"\n",
+            "[device.dividers]\n",
+            "cpu = 12\n",
+        );
+        let (merged, text) = resolve_source(&ConfigSource::Toml(child.to_string()))
+            .expect("the extends chain resolves");
+        assert_eq!(merged.device.len(), 7, "the parent devices merge in");
+        assert!(
+            merged.device.iter().any(|d| d.name == "wram"),
+            "a parent-only device survives the merge"
+        );
+        assert_eq!(text, child, "the submitted text stays the media tag");
+
+        // A child without an extends block parses verbatim.
+        let plain = concat!(
+            "[system]\n",
+            "name = \"only child\"\n",
+            "triple = \"rp2A03-nintendo-nes-ntsc\"\n",
+            "[[device]]\n",
+            "name = \"cpu0\"\n",
+            "kind = \"rp2A03.cpu\"\n",
+            "domain = \"main\"\n",
+        );
+        let (raw, text) = resolve_source(&ConfigSource::Toml(plain.to_string()))
+            .expect("a child without extends parses verbatim");
+        assert_eq!(
+            raw.system.as_ref().expect("the system block parses").name,
+            "only child"
+        );
+        assert_eq!(text, plain, "the media tag stays the submitted text");
     }
 }

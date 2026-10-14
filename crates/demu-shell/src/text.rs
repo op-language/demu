@@ -229,6 +229,14 @@ pub fn dispatch(
             };
             service.dump_layer(layer, path)
         }
+        "dump-pattern" => {
+            let [path] = words.as_slice() else {
+                return Err(CommandError::BadArgs(
+                    "usage: dump-pattern <path>".to_string(),
+                ));
+            };
+            service.dump_pattern(path)
+        }
         "inject" => {
             let [device, event @ ..] = words.as_slice() else {
                 return Err(CommandError::BadArgs(

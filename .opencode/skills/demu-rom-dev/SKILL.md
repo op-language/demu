@@ -55,11 +55,17 @@ list that `config --check` prints.
 | `config_triple` | one of two | a bundled triple, for example `sm83-nintendo-gameboy` |
 | `rom_base64` | no | the ROM image, base64-encoded |
 | `symbols_text` | no | the `.opl` symbol table as JSON text, version envelope 1 |
+| `symbols_file` | no | the host path of an `.opl` symbol-table text, version envelope 1, read at create time |
 | `output_dir` | no | an output-directory override |
 
 Supply exactly one of `config_toml` and `config_triple`. A supplied ROM
 overrides the cartridge boot file and reboots the machine through it. A ROM
 with no cartridge device in the config is an error.
+
+Supply at most one of `symbols_text` and `symbols_file`. The error reports
+the conflict the same way the `config_toml`/`config_triple` pair does. The
+host-filesystem read of `symbols_file` at create covers the same loopback
+trust as the `output_dir` override.
 
 Encode the ROM image with `base64`:
 
@@ -70,8 +76,13 @@ base64 -w0 <rom-file>
 Pass the text as `rom_base64`. The decoded image can reach 64 MiB.
 
 For symbols, read the `.opl` symbol table that `cart` writes. Pass its text
-as `symbols_text`. Symbol names then stand for addresses in the memory and
-trigger tools.
+as `symbols_text`, or its file path as `symbols_file`. Symbol names then
+stand for addresses in the memory and trigger tools.
+
+An oversized inline `symbols_text` falls back to the shell path. Write the
+`.opl` file into the session output directory. Then call `demu_command`
+with `cmd = "symbols"` and the bare file name. The path is confined to the
+output directory.
 
 The default session output directory is the session name under the daemon
 data root. An `output_dir` override replaces it. The directory collects the
@@ -97,7 +108,8 @@ Work in small steps.
    tick.
 2. Advance a bounded number of units with `demu_run_frame` or `demu_step`.
 3. Call `demu_regs` after every stop.
-4. Call `demu_read_memory` around the suspect addresses.
+4. Call `demu_read_memory` around the suspect addresses. The response
+   `window` field names the bus window that answered the first byte.
 5. Set `demu_break` and `demu_watch` where the program misbehaves.
 6. Call `demu_screenshot` after each suspect change.
 7. Record the machine tick `now` from every response.
@@ -126,7 +138,16 @@ passthrough section.
   unparseable address matches every event of the kind.
 - `demu_read_memory` takes `addr` and an optional `count`. The `addr` value
   is a symbol name or a number, for example `0xFF40`. The default `count`
-  is 16, and the cap is 65536. The response carries the bytes as hex text.
+  is 16, and the cap is 65536. The response carries the bytes as hex text
+  and the `window` field. `window` is the name of the bus window that
+  answered the first byte of the read, or `null` when no window answers.
+  The read goes through the CPU (primary) bus only.
+
+  On the NES the bus does not expose the palette RAM. A read at `$3F00`
+  routes through the `w_ppu_regs` mirror window and answers the 2C02 debug
+  peek for write-only registers. That answer is deterministic, and it is
+  not palette data. The truthful background-palette read is
+  `dump-palette`, which dumps the 2C02 palette RAM (32 bytes) to a file.
 - `demu_write_memory` takes `addr` and `bytes_hex`. The `bytes_hex` value
   is pairs of hex digits. Use the tool for a targeted patch.
 - `demu_regs` returns the register map. `demu_set_reg` takes `reg` and
@@ -172,8 +193,10 @@ demu_command(name="gb-boot", cmd="symbols", args=["cart.linked.opl"])
 ```
 
 The layer-dump family is `dump-vram`, `dump-nametable`, `dump-oam`,
-`dump-palette`, and `dump-framebuffer`. demu appends the layer suffix, such
-as `.vram`, to the path. The event grammar of `inject` is per device family.
+`dump-palette`, `dump-pattern`, and `dump-framebuffer`. demu appends the
+layer suffix, such as `.vram` or `.pattern`, to the path. `dump-pattern`
+dumps the cartridge CHR store (the pattern-table bytes). The event grammar
+of `inject` is per device family.
 
 ### Paths and input files
 

@@ -221,8 +221,17 @@ impl MachineService {
             .ok_or_else(|| CommandError::Failed("the machine declares no bus".into()))?
             .to_string();
         let mut bytes = Vec::with_capacity(n as usize);
+        let mut window: Option<String> = None;
         for i in 0..n {
-            bytes.push(machine.peek(&bus, demu_core::Address(start.saturating_add(i))));
+            let byte = if i == 0 {
+                let (byte, answer) =
+                    machine.peek_window(&bus, demu_core::Address(start.saturating_add(i)));
+                window = answer;
+                byte
+            } else {
+                machine.peek(&bus, demu_core::Address(start.saturating_add(i)))
+            };
+            bytes.push(byte);
         }
         let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02X}")).collect();
         Ok(CommandOutput::Text {
@@ -230,6 +239,7 @@ impl MachineService {
             json: serde_json::json!({
                 "addr": format!("{start:#06x}"),
                 "bytes": hex.join(" "),
+                "window": window,
             }),
         })
     }
@@ -480,14 +490,23 @@ impl MachineService {
             .ok_or_else(|| CommandError::Failed("the machine declares no bus".into()))?
             .to_string();
         let mut bytes = Vec::with_capacity(n as usize);
+        let mut window: Option<String> = None;
         for i in 0..n {
-            bytes.push(machine.peek(&bus, demu_core::Address(start.saturating_add(i))));
+            let byte = if i == 0 {
+                let (byte, answer) =
+                    machine.peek_window(&bus, demu_core::Address(start.saturating_add(i)));
+                window = answer;
+                byte
+            } else {
+                machine.peek(&bus, demu_core::Address(start.saturating_add(i)))
+            };
+            bytes.push(byte);
         }
         let written = bytes.len();
         std::fs::write(path, bytes).map_err(|e| CommandError::Io(e.to_string()))?;
         Ok(CommandOutput::Text {
             text: format!("dumped {written} bytes at {start:04X} to {path}"),
-            json: serde_json::json!({"addr": format!("{start:#06x}"), "written": written}),
+            json: serde_json::json!({"addr": format!("{start:#06x}"), "written": written, "window": window}),
         })
     }
 
@@ -858,6 +877,27 @@ impl MachineService {
         Ok(CommandOutput::plain(format!("dumped {name} to {file}")))
     }
 
+    /// Write the cartridge-pattern table bytes to a file.
+    ///
+    /// The byte count is the CHR store of the first cartridge device
+    /// that carries one. The file name gains the `.pattern` suffix,
+    /// like the video layer dumps gain theirs.
+    pub fn dump_pattern(&self, path: &str) -> Result<CommandOutput, CommandError> {
+        let machine = self.machine.as_ref().ok_or(CommandError::NoMachine)?;
+        let bytes = machine
+            .devices
+            .iter()
+            .filter_map(|d| d.pattern())
+            .find_map(|source| source.pattern_table())
+            .ok_or_else(|| CommandError::Failed("no device carries a pattern table".into()))?;
+        let file = format!("{path}.pattern");
+        std::fs::write(&file, bytes).map_err(|e| CommandError::Io(e.to_string()))?;
+        Ok(CommandOutput::Text {
+            text: format!("dumped {} pattern bytes to {file}", bytes.len()),
+            json: serde_json::json!({"path": file, "bytes": bytes.len()}),
+        })
+    }
+
     /// Register a breakpoint; the address may be a symbol name.
     pub fn break_at(&mut self, token: &str, cond: Option<&str>) -> Result<u64, CommandError> {
         let addr = self.resolve_address(token)?;
@@ -1042,5 +1082,106 @@ mod tests {
             Err(CommandError::Failed(message)) if message.contains("no video device")
         ));
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn dump_pattern_writes_the_cartridge_bytes() {
+        struct PatternStub {
+            name: String,
+            chr: Vec<u8>,
+        }
+        impl demu_core::device::PatternSource for PatternStub {
+            fn pattern_table(&self) -> Option<&[u8]> {
+                Some(&self.chr)
+            }
+        }
+        impl demu_core::Device for PatternStub {
+            fn name(&self) -> &str {
+                &self.name
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+
+            fn pattern(&self) -> Option<&dyn demu_core::device::PatternSource> {
+                Some(self)
+            }
+
+            fn reset(&mut self) {}
+
+            fn boot(&mut self, _state: Option<&demu_config::model::BootState>) {}
+
+            fn snapshot(&self) -> demu_core::Snapshot {
+                self.chr.clone()
+            }
+
+            fn restore(&mut self, _data: &[u8]) -> Result<(), demu_core::SnapshotError> {
+                Ok(())
+            }
+
+            fn notify_line(&mut self, _line: &str, _level: demu_core::Level, _tick: Tick) {}
+
+            fn tick(&mut self, _tick: Tick, _ctx: &mut demu_core::MachineCtx) {}
+        }
+
+        let source = vec![0x42, 0x21, 0x07, 0xFF];
+        let expected = source.clone();
+        let mut config = demu_config::smoke_config().expect("smoke config is valid");
+        let domain = config.devices[0].domain.clone();
+        let slot = config.devices.len();
+        config.devices_by_name.insert(
+            demu_config::newtypes::DeviceName::new("pattern0").expect("the device name validates"),
+            slot,
+        );
+        config.devices.push(demu_config::model::DeviceInstance {
+            name: demu_config::newtypes::DeviceName::new("pattern0")
+                .expect("the device name validates"),
+            kind: demu_config::newtypes::KindName::new("test.pattern")
+                .expect("the kind name validates"),
+            domain,
+            params: std::collections::BTreeMap::new(),
+            dividers: std::collections::BTreeMap::new(),
+        });
+        let mut ctors = demu_core::smoke_ctors();
+        ctors.register(
+            "test.pattern",
+            Box::new(move |device: &_, _config: &_| {
+                Ok(Box::new(PatternStub {
+                    name: device.name.to_string(),
+                    chr: source.clone(),
+                }) as Box<dyn demu_core::Device>)
+            }),
+        );
+        let mut loaded = MachineService::new();
+        loaded
+            .load_machine(demu_core::Machine::assemble(config, &ctors).expect("machine assembles"));
+        loaded.machine_mut().expect("loaded").boot();
+
+        let path = std::env::temp_dir().join("demu-shell-dump-pattern");
+        let file = format!("{}.pattern", path.to_string_lossy());
+        std::fs::remove_file(&file).ok();
+        let out = loaded
+            .dump_pattern(&path.to_string_lossy())
+            .expect("the pattern table dumps");
+        assert_eq!(
+            std::fs::read(&file).expect("the pattern file reads back"),
+            expected
+        );
+        let CommandOutput::Text { text, json } = out;
+        assert_eq!(text, format!("dumped 4 pattern bytes to {file}"));
+        assert_eq!(json["bytes"], 4);
+        std::fs::remove_file(&file).ok();
+
+        // The smoke machine carries no pattern-table device.
+        let bare = service();
+        assert!(matches!(
+            bare.dump_pattern(&path.to_string_lossy()),
+            Err(CommandError::Failed(_))
+        ));
     }
 }

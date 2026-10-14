@@ -394,12 +394,28 @@ Arguments:
 | `config_triple` | XOR | an installed or bundled triple, for example `sm83-nintendo-gameboy` |
 | `rom_base64` | no | the ROM image, base64-encoded |
 | `symbols_text` | no | the `.opl` symbol table as JSON text, version envelope 1 |
+| `symbols_file` | no | the host path of an `.opl` symbol-table text, version envelope 1, read at create time |
 | `output_dir` | no | an output-directory override |
 
 Exactly one of `config_toml` or `config_triple` must be supplied.
 A supplied ROM overrides the cartridge device's boot file and reboots
 the machine through it; a ROM with no cartridge device in the config
 is an error, as in the CLI.
+
+A `config_toml` value resolves its `[extends]` chain the same way the
+CLI does, over the bundled and user-config lookup. The submitted text
+stays the session's media tag.
+
+Supply at most one of `symbols_text` and `symbols_file`. The error
+reports the conflict the same way the `config_toml`/`config_triple`
+pair does. `symbols_file` is a host-filesystem read at create time,
+and the loopback trust covers it the same way it covers the
+`output_dir` override (section 5).
+
+An oversized inline `symbols_text` has the shell fallback. Write the
+`.opl` file into the session output directory. Then run `command` with
+`cmd = "symbols"` and the bare file name. That path is confined to the
+session output directory (section 8).
 
 The transport caps one MCP request body at 128 MiB. A 64 MiB ROM
 encodes to roughly 85 MiB of base64, so a large ROM plus a large
@@ -421,8 +437,8 @@ Errors surface as MCP tool errors with a human-readable message. The
 causes: a duplicate name among the live sessions, the session cap
 reached, a bad name, a TOML parse failure, a config validation
 failure, no cartridge device for a supplied ROM, a bad symbol table,
-an output-directory failure, a bad base64 image, and a decoded ROM
-over the 64 MiB cap.
+a `symbols_text`/`symbols_file` conflict, an output-directory failure,
+a bad base64 image, and a decoded ROM over the 64 MiB cap.
 
 ### `session_list` — OpenCode `demu_session_list`
 
@@ -520,7 +536,7 @@ and their paths:
 | Command | Confined path arguments |
 |---|---|
 | `dump` | the third token is the file path |
-| `dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-framebuffer` | the first token is the path; demu appends the layer suffix, such as `.vram`, after confinement |
+| `dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-pattern`, `dump-framebuffer` | the first token is the path; demu appends the layer suffix, such as `.vram` or `.pattern`, after confinement |
 | `screenshot` | the first non-flag token is the path; the flags are `--png` and `--ppm` |
 | `save-state`, `load-state`, `script`, `symbols` | the first token is the path |
 | `mkv-input`, `mkv-render` | the first token and the value after `-o` are paths |
@@ -562,8 +578,12 @@ the passthrough does not apply to them.
 - `read_memory` — OpenCode `demu_read_memory`. Argument `addr` (a
   string token: a symbol name or a number such as `0xFF40`);
   optional `count` (integer, default 16, cap 65536; a larger count is
-  rejected before the command runs). Returns `{addr, bytes}` with the
-  bytes as a hex text with one space between the bytes.
+  rejected before the command runs). Returns `{addr, bytes, window}`
+  with the bytes as a hex text with one space between the bytes. The
+  read goes through the CPU (primary) bus only. `window` names the bus
+  window that answered the first byte of the read, or is `null` when
+  no window answers. On a NES session, the truthful palette data comes
+  from the `dump-palette` dump, not from a `$3F00` bus read.
 - `write_memory` — OpenCode `demu_write_memory`. Arguments `addr` (a
   string token) and `bytes_hex` (hex digit pairs; whitespace inside
   the text is ignored). An empty or odd-length text is rejected before

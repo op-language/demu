@@ -103,6 +103,12 @@ pub(crate) struct SessionCreateArgs {
     /// after the machine boots.
     #[serde(default)]
     pub(crate) symbols_text: Option<String>,
+    /// The host path of an `.opl` symbol-table text (version envelope
+    /// 1), read at create time. Supply at most one of `symbols_text`
+    /// and `symbols_file`. The host-filesystem read is deliberate, at
+    /// the same trust level as the `output_dir` override.
+    #[serde(default)]
+    pub(crate) symbols_file: Option<String>,
     /// The session output directory override. The default is
     /// `<data-root>/<name>`. Command paths confine to this directory,
     /// so it must not contain whitespace.
@@ -152,7 +158,9 @@ fn path_slot(cmd: &str) -> Option<PathSlot> {
     match cmd {
         "dump" => Some(PathSlot::Word(2)),
         "dump-vram" | "dump-nametable" | "dump-oam" | "dump-palette" | "dump-framebuffer"
-        | "save-state" | "load-state" | "script" | "symbols" => Some(PathSlot::Word(0)),
+        | "dump-pattern" | "save-state" | "load-state" | "script" | "symbols" => {
+            Some(PathSlot::Word(0))
+        }
         "screenshot" => Some(PathSlot::Screenshot),
         "mkv-input" | "mkv-render" => Some(PathSlot::WordAndOutput(0)),
         "render-session" => Some(PathSlot::OutputOnly),
@@ -281,6 +289,18 @@ fn build_spec(
         Some(text) => Some(decode_rom(&text)?),
         None => None,
     };
+    let symbols_text = match (args.symbols_text, args.symbols_file) {
+        (Some(_), Some(_)) => {
+            return Err(ErrorData::invalid_params(
+                "supply at most one of symbols_text and symbols_file",
+                None,
+            ));
+        }
+        (text, None) => text,
+        (None, Some(path)) => Some(std::fs::read_to_string(&path).map_err(|error| {
+            ErrorData::invalid_params(format!("symbols_file is not readable: {error}"), None)
+        })?),
+    };
     let output_dir = match args.output_dir {
         Some(dir) => PathBuf::from(dir),
         None => data_root.join(name.as_str()),
@@ -301,7 +321,7 @@ fn build_spec(
         name,
         config,
         rom,
-        symbols_text: args.symbols_text,
+        symbols_text,
         output_dir,
     })
 }
@@ -337,7 +357,7 @@ fn warnings_json(warnings: &[demu_config::LintWarning]) -> Value {
 #[tool_router]
 impl DemuMcp {
     #[tool(
-        description = "Create an emulator session. Supply exactly one of config_toml (TOML configuration text) or config_triple (bundled triple such as sm83-nintendo-gameboy). Optionally supply rom_base64 (cartridge ROM, 64 MiB decoded cap), symbols_text (.opl JSON symbol table), and output_dir (defaults to <data-root>/<name>; must not contain whitespace). Returns {name, output_dir, warnings}."
+        description = "Create an emulator session. Supply exactly one of config_toml (TOML configuration text) or config_triple (bundled triple such as sm83-nintendo-gameboy). Optionally supply rom_base64 (cartridge ROM, 64 MiB decoded cap), symbols_text (.opl JSON symbol table) or symbols_file (path to an .opl file; supply at most one of the two), and output_dir (defaults to <data-root>/<name>; must not contain whitespace). Returns {name, output_dir, warnings}."
     )]
     async fn session_create(
         &self,
