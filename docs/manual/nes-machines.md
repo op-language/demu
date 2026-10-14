@@ -165,10 +165,23 @@ The loader supports the iNES forms with these mappers:
 An eight-kilobyte program RAM answers $6000-$7FFF on every mapper.
 The MMC5 extended RAM bank and the split mode are out of the set.
 
+MMC1 masks its CHR bank registers to the CHR store size. On a CHR-RAM
+cartridge, every bank-register value answers inside the 8 KiB store.
+Reads answer inside the store, and `$2007` writes land inside it. Real
+hardware selects in eight-kilobyte units in the eight-kilobyte mode and
+ignores the bank low bit there; this build selects in four-kilobyte
+units. Section 9 records the approximation. For CHR-ROM, the bank
+select stays exact for in-range banks. Out-of-range values mask, as
+the real mapper masks its registers.
+
 ## 9. Recorded approximations of this build
 
 - Sprite-zero hit timing and the sprite-overflow bug follow the
   simplified per-scanline evaluation.
+- The MMC1 CHR bank select works in four-kilobyte units. Real hardware
+  selects in eight-kilobyte units in the eight-kilobyte mode and
+  ignores the bank low bit there. On a CHR-RAM cartridge both selects
+  answer inside the store.
 - The PAL machine uses the same structure with the PAL sequencer
   steps, the PAL DMC and noise tables, and the PAL crystal.
 - The nestest and blargg acceptance runs and the cross-checks
@@ -181,4 +194,20 @@ The MMC5 extended RAM bank and the split mode are out of the set.
 - `run-until vblank` stops at a frame boundary on both machines.
 - The PPU register writes compose per line. Check `dump-nametable`
   and `dump-oam` between frames for exact mid-frame state.
+- The bus reads of `read`, `read-n`, and `dump` go through the CPU
+  (primary) bus only. The JSON response carries `window`, the name of
+  the bus window that answered the first byte of the read, or `null`
+  when no window answers.
+- The CPU bus does not expose the palette RAM. A read at `$3F00` routes
+  through the `w_ppu_regs` mirror window and answers the 2C02 debug
+  peek for write-only registers. That answer is deterministic, and it
+  is not palette data. The truthful background-palette read is
+  `dump-palette`, which dumps the 2C02 palette RAM (32 bytes) to a
+  file.
+- `dump-vram` and `dump-nametable` dump the 2 KiB internal nametable
+  RAM. `dump-palette` dumps the palette RAM. `dump-oam` and
+  `dump-framebuffer` work per the generic dump family. The PPU carries
+  no pattern-table layer of its own. The cartridge pattern table (CHR)
+  is dumped with `dump-pattern`, which writes the CHR bytes to
+  `<path>.pattern`.
 - The NTSC and PAL configs report both on `info` with their triple.

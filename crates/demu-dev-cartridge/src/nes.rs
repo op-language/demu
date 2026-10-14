@@ -15,7 +15,7 @@
 //! scope.
 
 use demu_config::model::BootState;
-use demu_core::device::{AccessWidth, BusAccess, MachineCtx};
+use demu_core::device::{AccessWidth, BusAccess, MachineCtx, PatternSource};
 use demu_core::frequency::{Address, Tick};
 use demu_core::signal::Level;
 use demu_core::{Device, Snapshot, SnapshotError};
@@ -323,15 +323,20 @@ impl NesCart {
         match self.mapper {
             NesMapper::Mmc1 => {
                 if self.mmc1_ctrl & 0x10 == 0 {
-                    // One eight-kilobyte window.
-                    usize::from(self.mmc1_chr0 & 0x0F) * 0x1000 + index
+                    // One eight-kilobyte window; the bank register
+                    // wraps into the character store so a CHR-RAM
+                    // cartridge answers every bank value.
+                    (usize::from(self.mmc1_chr0 & 0x0F) * 0x1000 + index) % self.chr.len().max(1)
                 } else {
-                    let bank = if addr < 0x1000 {
+                    let slot = if addr < 0x1000 {
                         self.mmc1_chr0
                     } else {
                         self.mmc1_chr1
                     };
-                    usize::from(bank & 0x0F) * 0x1000 + index
+                    // Two four-kilobyte windows; the offset stays
+                    // inside the four-kilobyte slot.
+                    let bank = usize::from(slot & 0x0F) % self.chr_4k_count();
+                    bank * 0x1000 + usize::from(addr & 0x0FFF)
                 }
             }
             NesMapper::Mmc5 => match self.mmc5_chr_mode {
@@ -505,6 +510,10 @@ impl Device for NesCart {
     }
 
     fn bus_mut(&mut self) -> Option<&mut dyn BusAccess> {
+        Some(self)
+    }
+
+    fn pattern(&self) -> Option<&dyn PatternSource> {
         Some(self)
     }
 
@@ -708,5 +717,136 @@ impl NesCart {
     /// True when the mapper needs visit scheduling.
     fn mapper_serves(&self) -> bool {
         self.mapper == NesMapper::Mmc5
+    }
+}
+
+impl PatternSource for NesCart {
+    fn pattern_table(&self) -> Option<&[u8]> {
+        Some(&self.chr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    use demu_config::model::DeviceInstance;
+
+    /// Program one MMC1 register through the five-write shift
+    /// sequence.
+    fn mmc1_program(cart: &mut NesCart, addr: Address, value: u8) {
+        for bit in 0..5 {
+            let level = u32::from((value >> bit) & 0x01);
+            cart.write(AccessWidth::Byte, addr, level, Tick(0));
+        }
+    }
+
+    /// The device entry of a test cartridge.
+    fn device_entry() -> Result<DeviceInstance, demu_config::ConfigError> {
+        Ok(DeviceInstance {
+            name: demu_config::DeviceName::new("cart")?,
+            kind: demu_config::KindName::new("nes.cart")?,
+            domain: "cpu".to_owned(),
+            params: BTreeMap::new(),
+            dividers: BTreeMap::new(),
+        })
+    }
+
+    /// An iNES image: the header, the program banks, and the
+    /// character banks where each byte carries its 256-byte stratum,
+    /// so the bank that answers a window stays visible in the byte.
+    fn ines_image(prg_banks: u8, chr_banks: u8) -> Vec<u8> {
+        let length = 16 + usize::from(prg_banks) * 0x4000 + usize::from(chr_banks) * 0x2000;
+        let mut image = vec![0; length];
+        image[..4].copy_from_slice(b"NES\x1a");
+        image[4] = prg_banks;
+        image[5] = chr_banks;
+        // The mapper number 1 in the flags header: the low nibble in
+        // flags 6, the high nibble in flags 7.
+        image[6] = 0x10;
+        image[7] = 0x00;
+        let chr_start = 16 + usize::from(prg_banks) * 0x4000;
+        for (offset, byte) in image[chr_start..].iter_mut().enumerate() {
+            *byte = ((offset / 0x100) % 0x100) as u8;
+        }
+        image
+    }
+
+    /// An MMC1 cartridge with the programmed control and character
+    /// registers.
+    fn mmc1_cart(
+        prg_banks: u8,
+        chr_banks: u8,
+        ctrl: u8,
+        chr0: u8,
+        chr1: u8,
+    ) -> Result<NesCart, demu_config::ConfigError> {
+        let mut cart = NesCart::new(&device_entry()?);
+        cart.boot(Some(&BootState::Hex {
+            bytes: ines_image(prg_banks, chr_banks),
+        }));
+        mmc1_program(&mut cart, Address(0x8000), ctrl);
+        mmc1_program(&mut cart, Address(0xA000), chr0);
+        mmc1_program(&mut cart, Address(0xC000), chr1);
+        Ok(cart)
+    }
+
+    #[test]
+    fn mmc1_chr_ram_eight_kib_window_wraps_bank() -> Result<(), demu_config::ConfigError> {
+        let mut cart = mmc1_cart(1, 0, 0x0C, 3, 0)?;
+        assert!(cart.chr_writable);
+        assert_eq!(cart.chr.len(), 0x2000);
+        assert_eq!(cart.mmc1_chr0, 3);
+        let addr = 0x0451u16;
+        cart.write(AccessWidth::Byte, Address(u32::from(addr)), 0xAB, Tick(0));
+        let expected = (usize::from(cart.mmc1_chr0) * 0x1000 + usize::from(addr & 0x1FFF)) % 0x2000;
+        assert_eq!(cart.chr[expected], 0xAB);
+        assert_eq!(cart.chr.iter().filter(|b| **b == 0xAB).count(), 1);
+        assert_eq!(cart.peek(Address(u32::from(addr))), 0xAB);
+        assert_eq!(
+            cart.read(AccessWidth::Byte, Address(u32::from(addr)), Tick(0)),
+            u32::from(0xABu8)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mmc1_two_four_kib_windows_map_the_slots() -> Result<(), demu_config::ConfigError> {
+        let mut cart = mmc1_cart(1, 0, 0x1C, 5, 6)?;
+        assert!(cart.mmc1_ctrl & 0x10 != 0);
+        assert_eq!(cart.chr.len(), 0x2000);
+        let below = 0x0123u16;
+        let above = 0x1567u16;
+        cart.write(AccessWidth::Byte, Address(u32::from(below)), 0x11, Tick(0));
+        cart.write(AccessWidth::Byte, Address(u32::from(above)), 0x22, Tick(0));
+        for (addr, value) in [(below, 0x11u8), (above, 0x22u8)] {
+            let index = cart.chr_index(addr);
+            assert!(index < cart.chr.len());
+            assert_eq!(cart.chr[index], value);
+        }
+        assert_eq!(cart.chr.iter().filter(|b| **b == 0x11).count(), 1);
+        assert_eq!(cart.chr.iter().filter(|b| **b == 0x22).count(), 1);
+        assert_eq!(cart.peek(Address(u32::from(below))), 0x11);
+        assert_eq!(cart.peek(Address(u32::from(above))), 0x22);
+        Ok(())
+    }
+
+    #[test]
+    fn mmc1_chr_rom_bank_keeps_exact_index() -> Result<(), demu_config::ConfigError> {
+        let cart = mmc1_cart(1, 2, 0x0C, 3, 0)?;
+        assert!(!cart.chr_writable);
+        assert_eq!(cart.chr.len(), 0x4000);
+        assert_eq!(cart.mmc1_chr0, 3);
+        for addr in [0x0123u16, 0x0F00] {
+            let raw = usize::from(cart.mmc1_chr0) * 0x1000 + usize::from(addr & 0x1FFF);
+            assert_eq!(raw % 0x4000, raw, "the modulo is an identity here");
+            assert_eq!(cart.peek(Address(u32::from(addr))), cart.chr[raw]);
+        }
+        // Bank three answers window three: the peek carries the
+        // 0x31xx stratum, not a wrapped lower bank.
+        assert_eq!(cart.peek(Address(0x0123)), 0x31);
+        assert_eq!(cart.peek(Address(0x0F00)), 0x3F);
+        Ok(())
     }
 }

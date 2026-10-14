@@ -515,40 +515,68 @@ impl Machine {
 
     /// A side-effect-free read through the bus decoder.
     pub fn peek(&self, bus_name: &str, address: crate::frequency::Address) -> u8 {
-        let Some(bus_idx) = self.bus_index.get(bus_name).copied() else {
-            return 0xFF;
-        };
-        let mut bus_idx = bus_idx;
+        self.peek_route(bus_name, address)
+            .map_or(0xFF, |(byte, _, _)| byte)
+    }
+
+    /// A side-effect-free read that also names the window that answers
+    /// it.
+    ///
+    /// The name is the bus window of the final decode hop: the window
+    /// that routes the access to its device. The return pairs the byte
+    /// with that name, and `(0xFF, None)` marks an address the bus
+    /// does not route.
+    pub fn peek_window(
+        &self,
+        bus_name: &str,
+        address: crate::frequency::Address,
+    ) -> (u8, Option<String>) {
+        match self.peek_route(bus_name, address) {
+            Some((byte, bus_idx, window)) => {
+                let name = self.buses[bus_idx].windows[window].name.clone();
+                (byte, Some(name))
+            }
+            None => (0xFF, None),
+        }
+    }
+
+    /// The peek walk: the byte with the bus and window slot of the
+    /// final decode hop that answered.
+    fn peek_route(
+        &self,
+        bus_name: &str,
+        address: crate::frequency::Address,
+    ) -> Option<(u8, usize, usize)> {
+        let mut bus_idx = self.bus_index.get(bus_name).copied()?;
         let mut address = address;
         for _ in 0..=MAX_BORROW_DEPTH {
-            let Some(hit) = decode_candidates(&self.buses[bus_idx], address.0, false)
+            let hit = decode_candidates(&self.buses[bus_idx], address.0, false)
                 .into_iter()
                 .find(|hit| {
                     self.devices
                         .get(hit.device)
                         .and_then(|d| d.bus())
                         .is_some_and(|bus| bus.decodes(address))
-                })
-            else {
-                return 0xFF;
-            };
+                })?;
             let Some(device) = self.devices.get(hit.device) else {
                 continue;
             };
             let Some(bus) = device.bus() else {
                 continue;
             };
-            if let Borrow::Bridge { bus, address: next } = bus.borrow(address) {
-                let Some(next_idx) = self.bus_index.get(&bus).copied() else {
-                    return 0xFF;
-                };
+            if let Borrow::Bridge {
+                bus: next_bus,
+                address: next,
+            } = bus.borrow(address)
+            {
+                let next_idx = self.bus_index.get(&next_bus).copied()?;
                 bus_idx = next_idx;
                 address = crate::frequency::Address(next);
                 continue;
             }
-            return bus.peek(address);
+            return Some((bus.peek(address), bus_idx, hit.window));
         }
-        0xFF
+        None
     }
 
     /// A debug write through the bus decoder, stamped at the current
@@ -1400,6 +1428,27 @@ mod tests {
         let mut machine = bridge_machine("sound", 0x8000, 0x8000);
         assert_eq!(machine.peek("sound", Address(0x8010)), 0xFF);
         assert!(!machine.debug_write("sound", Address(0x8011), 0x21));
+    }
+
+    #[test]
+    fn peek_window_names_the_answering_route() -> Result<(), MachineError> {
+        use crate::frequency::Address;
+        let mut machine = bridge_machine("cpu", 0x8000, 0x0000);
+        poke_ram(&mut machine, 0x10, 0x5A)?;
+        // The direct read names the RAM window.
+        let (byte, window) = machine.peek_window("cpu", Address(0x0010));
+        assert_eq!(byte, 0x5A);
+        assert_eq!(window.as_deref(), Some("w_ram"));
+        // The borrowed read names the window of the final hop on the
+        // borrowed bus, not the bridge window.
+        let (byte, window) = machine.peek_window("sound", Address(0x8010));
+        assert_eq!(byte, 0x5A);
+        assert_eq!(window.as_deref(), Some("w_ram"));
+        // An address no window routes answers without a name.
+        let (byte, window) = machine.peek_window("cpu", Address(0x0300));
+        assert_eq!(byte, 0xFF);
+        assert_eq!(window, None);
+        Ok(())
     }
 
     #[test]

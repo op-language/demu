@@ -30,7 +30,8 @@ pub mod triggers;
 pub use bus::{Bus, BusWindow, ConflictPolicy, Mirror};
 pub use device::{
     AccessWidth, AudioSource, BusAccess, CpuDebug, Decode, DecodeHit, Device, Frame, InputSink,
-    MachineCtx, MappedDevice, Route, Snapshot, SnapshotError, VideoLayer, VideoSource, Window,
+    MachineCtx, MappedDevice, PatternSource, Route, Snapshot, SnapshotError, VideoLayer,
+    VideoSource, Window,
 };
 pub use frequency::{Address, Divider, Frequency, Tick};
 pub use machine::{DeviceCtor, DeviceCtors, Machine, RunHook, smoke_ctors};

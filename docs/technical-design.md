@@ -256,7 +256,7 @@ The as-built command set of this build:
 | Registers | `regs`, `set-reg <name> <value>` |
 | Memory | `read <addr>`, `read-n <addr> <n>`, `write <addr> <bytes>`, `dump <addr> <n> <file>`, `fill <addr> <n> <byte>` |
 | Triggers | `break <addr>`, `watch <addr>`, `triggers`, `clear <id>` |
-| Video | `screenshot [--ppm|--png] <path>`, `dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-framebuffer` |
+| Video | `screenshot [--ppm|--png] <path>`, `dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-pattern`, `dump-framebuffer` |
 | State | `save-state <file>`, `load-state <file>` |
 | Symbols | `symbols <file.opl>`, `sym <name>` |
 | Input | `inject <device> <event>`, `script <file>` |
@@ -1610,7 +1610,7 @@ file tools, then the commands name them:
 | Command | Confined path arguments |
 |---|---|
 | `dump` | the third token |
-| `dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-framebuffer` | the first token; demu appends the layer suffix after confinement |
+| `dump-vram`, `dump-nametable`, `dump-oam`, `dump-palette`, `dump-pattern`, `dump-framebuffer` | the first token; demu appends the layer suffix after confinement |
 | `screenshot` | the first non-flag token (`--png`, `--ppm` are flags) |
 | `save-state`, `load-state`, `script`, `symbols` | the first token |
 | `mkv-input`, `mkv-render` | the first token and the value after `-o` |
